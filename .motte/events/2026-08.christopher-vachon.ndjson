@@ -1,0 +1,46 @@
+{"at":"2026-08-25T21:43:20Z","id":47,"by":"Christopher Vachon","as":"user","type":"created","title":"Validate implementation plan","state":"Todo"}
+{"at":"2026-08-25T21:43:54Z","id":47,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-08-25T21:43:54Z","id":47,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-08-25T21:45:43Z","id":48,"by":"Christopher Vachon","as":"user","type":"created","title":"Confirm chat API contract and update transport","state":"Todo"}
+{"at":"2026-08-25T21:45:44Z","id":49,"by":"Christopher Vachon","as":"user","type":"created","title":"Define MVP TUI interaction specification","state":"Todo"}
+{"at":"2026-08-25T21:45:44Z","id":50,"by":"Christopher Vachon","as":"user","type":"created","title":"Load users and presence into TUI","state":"Todo"}
+{"at":"2026-08-25T21:45:44Z","id":51,"by":"Christopher Vachon","as":"user","type":"created","title":"Implement message update synchronization","state":"Todo"}
+{"at":"2026-08-25T21:45:45Z","id":52,"by":"Christopher Vachon","as":"user","type":"created","title":"Define authentication and credential security policy","state":"Todo"}
+{"at":"2026-08-25T21:46:03Z","id":10,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":14}
+{"at":"2026-08-25T21:46:04Z","id":10,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":48}
+{"at":"2026-08-25T21:46:04Z","id":19,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":48}
+{"at":"2026-08-25T21:46:05Z","id":20,"by":"Christopher Vachon","as":"user","type":"unblocked","blocker":15}
+{"at":"2026-08-25T21:46:05Z","id":20,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":11}
+{"at":"2026-08-25T21:46:05Z","id":24,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":49}
+{"at":"2026-08-25T21:46:06Z","id":29,"by":"Christopher Vachon","as":"user","type":"unblocked","blocker":17}
+{"at":"2026-08-25T21:46:06Z","id":29,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":15}
+{"at":"2026-08-25T21:46:07Z","id":34,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":10}
+{"at":"2026-08-25T21:46:07Z","id":50,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":21}
+{"at":"2026-08-25T21:46:07Z","id":50,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":29}
+{"at":"2026-08-25T21:46:08Z","id":50,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":27}
+{"at":"2026-08-25T21:46:08Z","id":51,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":22}
+{"at":"2026-08-25T21:46:09Z","id":51,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":27}
+{"at":"2026-08-25T21:46:09Z","id":51,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":30}
+{"at":"2026-08-25T21:46:09Z","id":33,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":51}
+{"at":"2026-08-25T21:46:10Z","id":16,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":52}
+{"at":"2026-08-25T21:46:10Z","id":52,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":14}
+{"at":"2026-08-25T21:46:11Z","id":52,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":34}
+{"at":"2026-08-25T21:46:11Z","id":46,"by":"Christopher Vachon","as":"user","type":"unblocked","blocker":42}
+{"at":"2026-08-25T21:46:11Z","id":46,"by":"Christopher Vachon","as":"user","type":"unblocked","blocker":43}
+{"at":"2026-08-25T21:46:12Z","id":46,"by":"Christopher Vachon","as":"user","type":"unblocked","blocker":44}
+{"at":"2026-08-25T21:46:12Z","id":46,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":11}
+{"at":"2026-08-25T21:46:13Z","id":39,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":14}
+{"at":"2026-08-25T21:46:13Z","id":39,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":35}
+{"at":"2026-08-25T21:46:13Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":17}
+{"at":"2026-08-25T21:46:14Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":18}
+{"at":"2026-08-25T21:46:14Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":26}
+{"at":"2026-08-25T21:46:15Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":28}
+{"at":"2026-08-25T21:46:15Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":31}
+{"at":"2026-08-25T21:46:15Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":50}
+{"at":"2026-08-25T21:46:16Z","id":45,"by":"Christopher Vachon","as":"user","type":"blocked","blocker":51}
+{"at":"2026-08-25T21:47:01Z","id":30,"by":"Christopher Vachon","as":"user","type":"title","from":"Load and refresh selected channel messages","to":"Load, paginate, and refresh selected channel messages"}
+{"at":"2026-08-25T21:47:02Z","id":41,"by":"Christopher Vachon","as":"user","type":"title","from":"Evaluate cross-platform packaging path","to":"Evaluate post-MVP cross-platform packaging path"}
+{"at":"2026-08-25T21:48:54Z","id":47,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-08-25T22:06:56Z","id":53,"by":"Christopher Vachon","as":"user","type":"created","title":"Configure project subagents","state":"Todo"}
+{"at":"2026-08-25T22:07:01Z","id":53,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-08-25T22:07:01Z","id":53,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}

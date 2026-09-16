@@ -1,0 +1,51 @@
+{"at":"2026-09-16T18:48:41Z","id":48,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T18:48:41Z","id":48,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T18:52:23Z","id":48,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:02:52Z","id":3,"by":"Christopher Vachon","as":"user","type":"title","from":"Epic: Better Auth OAuth device login","to":"Epic: Better Auth email/password login"}
+{"at":"2026-09-16T19:02:57Z","id":14,"by":"Christopher Vachon","as":"user","type":"title","from":"Confirm Better Auth OAuth endpoints and client registration","to":"Verify sign-in/session behavior against the live server"}
+{"at":"2026-09-16T19:03:01Z","id":15,"by":"Christopher Vachon","as":"user","type":"title","from":"Implement device authorization login flow","to":"Implement email/password login flow"}
+{"at":"2026-09-16T19:03:07Z","id":17,"by":"Christopher Vachon","as":"user","type":"title","from":"Implement token refresh and logout","to":"Handle session expiry and logout"}
+{"at":"2026-09-16T19:26:11Z","id":14,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:26:11Z","id":14,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:26:14Z","id":14,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:26:21Z","id":10,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:26:21Z","id":10,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:30:46Z","id":10,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:30:56Z","id":11,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:30:56Z","id":11,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:34:45Z","id":11,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:07Z","id":12,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:07Z","id":12,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:08Z","id":13,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:08Z","id":13,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:08Z","id":19,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:08Z","id":19,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:09Z","id":20,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:09Z","id":20,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:09Z","id":15,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:09Z","id":15,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:10Z","id":16,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:10Z","id":16,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:10Z","id":17,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:10Z","id":17,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:11Z","id":18,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:11Z","id":18,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:11Z","id":24,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:11Z","id":24,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:12Z","id":27,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:12Z","id":27,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:13Z","id":29,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T19:56:13Z","id":29,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T19:56:30Z","id":12,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:31Z","id":13,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:32Z","id":19,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:33Z","id":20,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:47Z","id":15,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:48Z","id":16,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:49Z","id":17,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:50Z","id":18,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:56:59Z","id":24,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:57:00Z","id":27,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:57:01Z","id":29,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T19:57:59Z","by":"Christopher Vachon","as":"user","id":54,"type":"merged","into":48,"title":"Validate CLI plan against family-chat PR 81"}
+{"at":"2026-09-16T19:58:17Z","id":2,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}

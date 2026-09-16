@@ -1,0 +1,99 @@
+{"at":"2026-08-25T21:37:05Z","id":1,"by":"codex-mcp-client","as":"agent","type":"created","title":"Build terminal-first family chat CLI","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":2,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Project foundation and architecture","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":3,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Better Auth OAuth device login","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":4,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: REST API client and domain models","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":5,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Core TUI shell","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":6,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Chat workflows","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":7,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Configuration, storage, and environments","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":8,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Packaging and developer workflow","state":"Todo"}
+{"at":"2026-08-25T21:37:48Z","id":9,"by":"codex-mcp-client","as":"agent","type":"created","title":"Epic: Verification and resilience","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":10,"by":"codex-mcp-client","as":"agent","type":"created","title":"Choose initial Rust crate structure and dependency set","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":11,"by":"codex-mcp-client","as":"agent","type":"created","title":"Scaffold Rust binary project","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":12,"by":"codex-mcp-client","as":"agent","type":"created","title":"Define application state and event model","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":13,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add async runtime and graceful terminal lifecycle","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":11,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":10}
+{"at":"2026-08-25T21:38:34Z","id":12,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":11}
+{"at":"2026-08-25T21:38:34Z","id":13,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":11}
+{"at":"2026-08-25T21:38:34Z","id":14,"by":"codex-mcp-client","as":"agent","type":"created","title":"Confirm Better Auth OAuth endpoints and client registration","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":15,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement device authorization login flow","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":16,"by":"codex-mcp-client","as":"agent","type":"created","title":"Store and retrieve credentials from OS keychain","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":17,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement token refresh and logout","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":18,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add logged-out and auth-error TUI states","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":15,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":14}
+{"at":"2026-08-25T21:38:34Z","id":16,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":15}
+{"at":"2026-08-25T21:38:34Z","id":17,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":16}
+{"at":"2026-08-25T21:38:34Z","id":18,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":15}
+{"at":"2026-08-25T21:38:34Z","id":19,"by":"codex-mcp-client","as":"agent","type":"created","title":"Define chat API domain types","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":20,"by":"codex-mcp-client","as":"agent","type":"created","title":"Build authenticated HTTP client wrapper","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":21,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement channel and user endpoints","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":22,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement message read and send endpoints","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":23,"by":"codex-mcp-client","as":"agent","type":"created","title":"Map API errors to user-facing TUI errors","state":"Todo"}
+{"at":"2026-08-25T21:38:34Z","id":20,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":19}
+{"at":"2026-08-25T21:38:34Z","id":21,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":20}
+{"at":"2026-08-25T21:38:34Z","id":22,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":20}
+{"at":"2026-08-25T21:38:34Z","id":23,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":20}
+{"at":"2026-08-25T21:38:35Z","id":24,"by":"codex-mcp-client","as":"agent","type":"created","title":"Create Ratatui layout skeleton","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":25,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement input handling and focus management","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":26,"by":"codex-mcp-client","as":"agent","type":"created","title":"Render loading, empty, and error states","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":27,"by":"codex-mcp-client","as":"agent","type":"created","title":"Integrate async app events with TUI loop","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":28,"by":"codex-mcp-client","as":"agent","type":"created","title":"Handle terminal resize and clean exit","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":25,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":24}
+{"at":"2026-08-25T21:38:35Z","id":26,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":24}
+{"at":"2026-08-25T21:38:35Z","id":27,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":25}
+{"at":"2026-08-25T21:38:35Z","id":28,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":24}
+{"at":"2026-08-25T21:38:35Z","id":29,"by":"codex-mcp-client","as":"agent","type":"created","title":"Load initial channels and current user","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":30,"by":"codex-mcp-client","as":"agent","type":"created","title":"Load and refresh selected channel messages","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":31,"by":"codex-mcp-client","as":"agent","type":"created","title":"Compose and send messages","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":32,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement basic message search/filter","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":33,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add unread or new-message indicators","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":30,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":29}
+{"at":"2026-08-25T21:38:35Z","id":31,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":30}
+{"at":"2026-08-25T21:38:35Z","id":32,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":30}
+{"at":"2026-08-25T21:38:35Z","id":33,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":30}
+{"at":"2026-08-25T21:38:35Z","id":34,"by":"codex-mcp-client","as":"agent","type":"created","title":"Define config file format and locations","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":35,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement config load/save and validation","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":36,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add profile-aware credential namespace","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":37,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add setup/config commands","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":35,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":34}
+{"at":"2026-08-25T21:38:35Z","id":36,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":34}
+{"at":"2026-08-25T21:38:35Z","id":37,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":35}
+{"at":"2026-08-25T21:38:35Z","id":38,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add standard developer commands","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":39,"by":"codex-mcp-client","as":"agent","type":"created","title":"Document local run and auth setup","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":40,"by":"codex-mcp-client","as":"agent","type":"created","title":"Prepare release build settings","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":41,"by":"codex-mcp-client","as":"agent","type":"created","title":"Evaluate cross-platform packaging path","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":39,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":38}
+{"at":"2026-08-25T21:38:35Z","id":40,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":38}
+{"at":"2026-08-25T21:38:35Z","id":41,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":40}
+{"at":"2026-08-25T21:38:35Z","id":42,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add unit tests for app state transitions","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":43,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add mocked API client tests","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":44,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add auth flow tests around polling behavior","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":45,"by":"codex-mcp-client","as":"agent","type":"created","title":"Manual TUI verification checklist","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":46,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add CI or preflight check","state":"Todo"}
+{"at":"2026-08-25T21:38:35Z","id":46,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":42}
+{"at":"2026-08-25T21:38:35Z","id":46,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":43}
+{"at":"2026-08-25T21:38:35Z","id":46,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":44}
+{"at":"2026-08-25T21:39:10Z","id":15,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":11}
+{"at":"2026-08-25T21:39:10Z","id":16,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":36}
+{"at":"2026-08-25T21:39:10Z","id":20,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":15}
+{"at":"2026-08-25T21:39:10Z","id":24,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":12}
+{"at":"2026-08-25T21:39:10Z","id":24,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":13}
+{"at":"2026-08-25T21:39:10Z","id":29,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":17}
+{"at":"2026-08-25T21:39:10Z","id":29,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":21}
+{"at":"2026-08-25T21:39:10Z","id":29,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":24}
+{"at":"2026-08-25T21:39:10Z","id":29,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":27}
+{"at":"2026-08-25T21:39:11Z","id":30,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":22}
+{"at":"2026-08-25T21:39:11Z","id":31,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":22}
+{"at":"2026-08-25T21:39:11Z","id":38,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":11}
+{"at":"2026-08-25T21:39:11Z","id":42,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":12}
+{"at":"2026-08-25T21:39:11Z","id":43,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":20}
+{"at":"2026-08-25T21:39:11Z","id":44,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":15}
+{"at":"2026-08-25T21:39:11Z","id":45,"by":"codex-mcp-client","as":"agent","type":"blocked","blocker":24}
+{"at":"2026-08-25T22:11:07Z","id":53,"by":"codex-mcp-client","as":"agent","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-08-26T01:26:36Z","id":54,"by":"codex-mcp-client","as":"agent","type":"created","title":"Validate CLI plan against family-chat PR 81","state":"Todo"}
+{"at":"2026-08-26T01:32:03Z","id":54,"by":"codex-mcp-client","as":"agent","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-08-26T01:32:03Z","id":54,"by":"codex-mcp-client","as":"agent","type":"assigned","from":null,"to":"codex-mcp-client"}
+{"at":"2026-08-26T01:33:08Z","id":55,"by":"codex-mcp-client","as":"agent","type":"created","title":"Expose Better Auth device login for native clients","state":"Todo"}
+{"at":"2026-08-26T01:33:08Z","id":56,"by":"codex-mcp-client","as":"agent","type":"created","title":"Publish stable API v1 client contract and fixtures","state":"Todo"}
+{"at":"2026-08-26T01:33:08Z","id":57,"by":"codex-mcp-client","as":"agent","type":"created","title":"Implement authenticated SSE client and event router","state":"Todo"}
+{"at":"2026-08-26T01:33:09Z","id":58,"by":"codex-mcp-client","as":"agent","type":"created","title":"Define rich-text terminal rendering and compose encoding","state":"Todo"}
+{"at":"2026-08-26T01:33:09Z","id":59,"by":"codex-mcp-client","as":"agent","type":"created","title":"Add message-send idempotency to API","state":"Todo"}
