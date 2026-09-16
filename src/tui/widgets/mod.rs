@@ -6,7 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 use crate::app::AppState;
-use crate::app::state::{LoggedInState, LoginField, LoginForm, Screen};
+use crate::app::state::{LoggedInFocus, LoggedInState, LoginField, LoginForm, Screen};
 use crate::text::html;
 
 use super::layout::split;
@@ -91,6 +91,14 @@ fn login_form(frame: &mut Frame, form: &LoginForm) {
         true,
     );
 
+    let (focused_area, focused_len) = match form.focus.unwrap_or(LoginField::Email) {
+        LoginField::Email => (email_area, form.email.chars().count()),
+        LoginField::Password => (password_area, form.password.chars().count()),
+    };
+    let cursor_x = (focused_area.x + 1 + focused_len as u16)
+        .min(focused_area.x + focused_area.width.saturating_sub(2));
+    frame.set_cursor_position((cursor_x, focused_area.y + 1));
+
     if let Some(error) = &form.error {
         frame.render_widget(
             Paragraph::new(error.as_str()).style(Style::default().fg(Color::Red)),
@@ -117,15 +125,10 @@ fn render_field(
     } else {
         value.to_string()
     };
-    let style = if focused {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .style(style);
+        .style(focus_style(focused));
     frame.render_widget(Paragraph::new(display).block(block), area);
 }
 
@@ -140,6 +143,10 @@ fn inner_area(area: Rect) -> Rect {
 
 fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     let layout = split(frame.area());
+    let [messages_area, compose_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .areas(layout.main);
 
     let channels = state.channels.as_deref().unwrap_or(&[]);
     let items: Vec<ListItem> = channels
@@ -158,8 +165,14 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
             ListItem::new(label).style(style)
         })
         .collect();
+    let sidebar_style = focus_style(state.focus == LoggedInFocus::Channels);
     frame.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title("Channels")),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Channels")
+                .style(sidebar_style),
+        ),
         layout.sidebar,
     );
 
@@ -196,14 +209,45 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         Paragraph::new(body)
             .block(Block::default().borders(Borders::ALL).title(title))
             .wrap(Wrap { trim: false }),
-        layout.main,
+        messages_area,
     );
+
+    let compose_focused = state.focus == LoggedInFocus::Compose;
+    let compose_title = if state.sending {
+        "Sending…"
+    } else {
+        "Message"
+    };
+    frame.render_widget(
+        Paragraph::new(state.compose.as_str()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(compose_title)
+                .style(focus_style(compose_focused)),
+        ),
+        compose_area,
+    );
+    if compose_focused {
+        // Puts the terminal's real cursor at the end of the draft so typing
+        // feels like a normal text input rather than a static display.
+        let cursor_x = compose_area.x + 1 + state.compose.chars().count() as u16;
+        let cursor_x = cursor_x.min(compose_area.x + compose_area.width.saturating_sub(2));
+        frame.set_cursor_position((cursor_x, compose_area.y + 1));
+    }
 
     let status = state.status.clone().unwrap_or_else(|| {
         format!(
-            "Signed in as {} · \u{2191}/\u{2193} channels · r refresh · l logout · q quit",
+            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · Enter send · r refresh · l logout · q quit",
             state.user.name
         )
     });
     frame.render_widget(Paragraph::new(status), layout.status);
+}
+
+fn focus_style(focused: bool) -> Style {
+    if focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    }
 }

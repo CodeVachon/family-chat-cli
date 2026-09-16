@@ -32,6 +32,12 @@ impl LoginForm {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoggedInFocus {
+    Channels,
+    Compose,
+}
+
 #[derive(Debug)]
 pub struct LoggedInState {
     pub user: User,
@@ -41,6 +47,9 @@ pub struct LoggedInState {
     pub messages: HashMap<String, Vec<Message>>,
     pub loading_messages: bool,
     pub status: Option<String>,
+    pub focus: LoggedInFocus,
+    pub compose: String,
+    pub sending: bool,
 }
 
 impl LoggedInState {
@@ -52,6 +61,9 @@ impl LoggedInState {
             messages: HashMap::new(),
             loading_messages: false,
             status: None,
+            focus: LoggedInFocus::Channels,
+            compose: String::new(),
+            sending: false,
         }
     }
 
@@ -151,6 +163,25 @@ impl AppState {
         key: KeyEvent,
         should_quit: &mut bool,
     ) -> Option<Command> {
+        if key.code == KeyCode::Tab {
+            state.focus = match state.focus {
+                LoggedInFocus::Channels => LoggedInFocus::Compose,
+                LoggedInFocus::Compose => LoggedInFocus::Channels,
+            };
+            return None;
+        }
+
+        match state.focus {
+            LoggedInFocus::Channels => Self::on_channels_key(state, key, should_quit),
+            LoggedInFocus::Compose => Self::on_compose_key(state, key),
+        }
+    }
+
+    fn on_channels_key(
+        state: &mut LoggedInState,
+        key: KeyEvent,
+        should_quit: &mut bool,
+    ) -> Option<Command> {
         match key.code {
             KeyCode::Char('q') => {
                 *should_quit = true;
@@ -177,6 +208,34 @@ impl AppState {
                     return Self::load_selected(state);
                 }
                 None
+            }
+            _ => None,
+        }
+    }
+
+    /// The draft is kept in `state.compose` until a send is *confirmed*
+    /// successful (see `on_message_sent`) — a failed or in-flight send must
+    /// never lose what the user typed (#31).
+    fn on_compose_key(state: &mut LoggedInState, key: KeyEvent) -> Option<Command> {
+        match key.code {
+            KeyCode::Char(c) => {
+                state.compose.push(c);
+                None
+            }
+            KeyCode::Backspace => {
+                state.compose.pop();
+                None
+            }
+            KeyCode::Enter => {
+                if state.sending || state.compose.trim().is_empty() {
+                    return None;
+                }
+                let channel_id = state.selected_channel()?.id.clone();
+                state.sending = true;
+                Some(Command::SendMessage {
+                    channel_id,
+                    body: state.compose.clone(),
+                })
             }
             _ => None,
         }
@@ -273,6 +332,33 @@ impl AppState {
         }
     }
 
+    pub fn on_message_sent(
+        &mut self,
+        channel_id: String,
+        result: Result<(), ApiError>,
+    ) -> Option<Command> {
+        let Screen::LoggedIn(state) = &mut self.screen else {
+            return None;
+        };
+        state.sending = false;
+        match result {
+            Ok(()) => {
+                state.compose.clear();
+                // Force a reload rather than splicing the new message in
+                // locally: the send response doesn't carry the decorated
+                // shape (author/reactions/mentions) GET returns, and a
+                // refetch is simple and correct without SSE to reconcile
+                // against yet (see #57).
+                state.messages.remove(&channel_id);
+                Some(Command::LoadMessages { channel_id })
+            }
+            Err(error) => {
+                state.status = Some(format!("Couldn't send message: {error}"));
+                None
+            }
+        }
+    }
+
     pub fn on_logout(&mut self) {
         self.screen = Screen::LoggedOut(LoginForm::new());
     }
@@ -354,6 +440,98 @@ mod tests {
 
     #[test]
     fn channel_navigation_requests_messages_for_a_not_yet_loaded_channel() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+
+        let command = state.on_key(key(KeyCode::Down));
+        match command {
+            Some(Command::LoadMessages { channel_id }) => assert_eq!(channel_id, "c2"),
+            other => panic!("expected LoadMessages, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tab_moves_focus_into_compose_where_letters_are_typed_not_shortcuts() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('q'))); // would quit in channel-nav focus
+
+        assert!(!state.should_quit);
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.compose, "q");
+    }
+
+    #[test]
+    fn enter_on_an_empty_draft_does_not_send() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Tab));
+        let command = state.on_key(key(KeyCode::Enter));
+        assert!(command.is_none());
+    }
+
+    #[test]
+    fn enter_sends_and_a_second_enter_is_ignored_while_sending() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('h')));
+        state.on_key(key(KeyCode::Char('i')));
+
+        let first = state.on_key(key(KeyCode::Enter));
+        match first {
+            Some(Command::SendMessage { channel_id, body }) => {
+                assert_eq!(channel_id, "c1");
+                assert_eq!(body, "hi");
+            }
+            other => panic!("expected SendMessage, got {other:?}"),
+        }
+
+        // The draft is kept (not cleared) until the send is confirmed, and a
+        // second Enter while `sending` is true must not fire another send.
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.compose, "hi");
+        assert!(state.on_key(key(KeyCode::Enter)).is_none());
+    }
+
+    #[test]
+    fn a_failed_send_keeps_the_draft_and_clears_the_sending_flag() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('h')));
+        state.on_key(key(KeyCode::Enter));
+
+        state.on_message_sent("c1".to_string(), Err(ApiError::Server("nope".to_string())));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.compose, "h");
+        assert!(!logged_in.sending);
+    }
+
+    #[test]
+    fn a_successful_send_clears_the_draft_and_reloads_messages() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('h')));
+        state.on_key(key(KeyCode::Enter));
+
+        let command = state.on_message_sent("c1".to_string(), Ok(()));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.compose, "");
+        assert!(
+            matches!(command, Some(Command::LoadMessages { channel_id }) if channel_id == "c1")
+        );
+    }
+
+    /// A logged-in state with N channels named `c1..cN`, ready for
+    /// channel-navigation or composer tests.
+    fn logged_in_with_channels<const N: usize>(names: [&str; N]) -> AppState {
         let mut state = AppState::resuming();
         state.on_resume_finished(Some(User {
             id: "u1".into(),
@@ -361,32 +539,20 @@ mod tests {
             email: "chris@example.com".into(),
             approval_status: "approved".into(),
         }));
-        let channels = vec![
-            Channel {
-                id: "c1".into(),
-                name: "General".into(),
+        let channels = names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| Channel {
+                id: format!("c{}", i + 1),
+                name: name.to_string(),
                 description: None,
                 is_private: false,
                 is_archived: false,
                 is_favorite: false,
                 unread_count: 0,
-            },
-            Channel {
-                id: "c2".into(),
-                name: "Random".into(),
-                description: None,
-                is_private: false,
-                is_archived: false,
-                is_favorite: false,
-                unread_count: 0,
-            },
-        ];
+            })
+            .collect();
         state.on_channels_loaded(Ok(channels));
-
-        let command = state.on_key(key(KeyCode::Down));
-        match command {
-            Some(Command::LoadMessages { channel_id }) => assert_eq!(channel_id, "c2"),
-            other => panic!("expected LoadMessages, got {other:?}"),
-        }
+        state
     }
 }

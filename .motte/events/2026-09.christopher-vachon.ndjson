@@ -49,3 +49,13 @@
 {"at":"2026-09-16T19:57:01Z","id":29,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-16T19:57:59Z","by":"Christopher Vachon","as":"user","id":54,"type":"merged","into":48,"title":"Validate CLI plan against family-chat PR 81"}
 {"at":"2026-09-16T19:58:17Z","id":2,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
+{"at":"2026-09-16T20:11:56Z","id":55,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
+{"at":"2026-09-16T20:18:21Z","id":22,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T20:18:21Z","id":22,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T20:18:22Z","id":31,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T20:18:22Z","id":31,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T20:18:33Z","id":22,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T20:18:34Z","id":31,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T20:18:48Z","id":25,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T20:18:48Z","id":25,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T20:18:49Z","id":25,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}

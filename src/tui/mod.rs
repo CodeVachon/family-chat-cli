@@ -78,6 +78,7 @@ async fn run_app(
                     state.on_messages_loaded(channel_id, result);
                     None
                 }
+                Some(Event::MessageSent { channel_id, result }) => state.on_message_sent(channel_id, result),
                 None => None,
             },
         };
@@ -93,6 +94,9 @@ async fn run_app(
                 Command::LoadMessages { channel_id } => {
                     state.on_messages_loading();
                     spawn_load_messages(client.clone(), tx.clone(), channel_id);
+                }
+                Command::SendMessage { channel_id, body } => {
+                    spawn_send_message(client.clone(), tx.clone(), channel_id, body);
                 }
                 Command::Logout => {
                     state.on_logout();
@@ -154,6 +158,19 @@ fn spawn_load_messages(client: ApiClient, tx: mpsc::UnboundedSender<Event>, chan
             .await
             .map(|response| response.messages);
         let _ = tx.send(Event::MessagesLoaded { channel_id, result });
+    });
+}
+
+fn spawn_send_message(
+    client: ApiClient,
+    tx: mpsc::UnboundedSender<Event>,
+    channel_id: String,
+    body: String,
+) {
+    tokio::spawn(async move {
+        let html = crate::text::html::plain_text_to_html(&body);
+        let result = client.send_message(&channel_id, &html).await;
+        let _ = tx.send(Event::MessageSent { channel_id, result });
     });
 }
 

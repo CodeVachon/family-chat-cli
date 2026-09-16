@@ -106,6 +106,27 @@ impl ApiClient {
         self.get(&format!("/api/v1/channels/{channel_id}/messages"))
             .await
     }
+
+    /// `body_html` is a full message body (sanitized HTML — see
+    /// `text::html::plain_text_to_html`), not plain text. The response's
+    /// `message` is the raw insert row (no author/reactions/mentions), so
+    /// this deliberately doesn't try to parse and return it — callers
+    /// reconcile by reloading the channel's messages.
+    pub async fn send_message(&self, channel_id: &str, body_html: &str) -> Result<(), ApiError> {
+        let response = self
+            .authed(
+                self.http
+                    .post(self.url(&format!("/api/v1/channels/{channel_id}/messages"))),
+            )
+            .json(&serde_json::json!({ "body": body_html }))
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::from_response(response).await)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -234,5 +255,40 @@ mod tests {
             response.messages[0].created_at.to_rfc3339(),
             "2026-09-16T12:34:56+00:00"
         );
+    }
+
+    #[tokio::test]
+    async fn send_message_posts_the_html_body_with_the_bearer_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .and(header("Authorization", "Bearer tok_abc123"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "message": { "id": "m1", "channelId": "c1", "body": "<p>hi</p>" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        client.set_token(Some("tok_abc123".to_string()));
+
+        client.send_message("c1", "<p>hi</p>").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_message_surfaces_a_validation_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "error": { "message": "Message cannot be empty" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let error = client.send_message("c1", "<p></p>").await.unwrap_err();
+
+        assert_eq!(error.to_string(), "Message cannot be empty");
     }
 }

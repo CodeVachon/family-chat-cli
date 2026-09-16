@@ -17,6 +17,10 @@ pub enum Event {
         channel_id: String,
         result: Result<Vec<Message>, ApiError>,
     },
+    MessageSent {
+        channel_id: String,
+        result: Result<(), ApiError>,
+    },
 }
 
 /// An async side effect the state layer needs performed. Kept separate from
@@ -27,6 +31,7 @@ pub enum Command {
     SubmitLogin { email: String, password: String },
     LoadChannels,
     LoadMessages { channel_id: String },
+    SendMessage { channel_id: String, body: String },
     Logout,
     Quit,
 }
