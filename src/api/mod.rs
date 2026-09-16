@@ -2,7 +2,7 @@
 
 pub mod client;
 pub mod error;
-mod stream;
+pub mod stream;
 // Wire-format mirrors of server JSON — not every field this prototype
 // deserializes is read yet (e.g. `Channel::is_private`, kept for when
 // channel-visibility UI lands).
@@ -11,3 +11,4 @@ pub mod types;
 
 pub use client::ApiClient;
 pub use error::ApiError;
+pub use stream::RealtimeStream;

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::api::ApiError;
-use crate::api::types::{Channel, Message, User};
+use crate::api::types::{Channel, Message, RealtimeEvent, User};
 
 use super::event::Command;
 
@@ -50,6 +50,13 @@ pub struct LoggedInState {
     pub focus: LoggedInFocus,
     pub compose: String,
     pub sending: bool,
+    /// The most recent request sequence number issued per channel — lets
+    /// `on_messages_loaded` reject a stale response that lost the race
+    /// against a newer request for the same channel (manual refresh, a
+    /// channel switch, and an SSE-triggered reload can all fire close
+    /// together — see #51).
+    message_request_seq: HashMap<String, u64>,
+    next_seq: u64,
 }
 
 impl LoggedInState {
@@ -64,11 +71,26 @@ impl LoggedInState {
             focus: LoggedInFocus::Channels,
             compose: String::new(),
             sending: false,
+            message_request_seq: HashMap::new(),
+            next_seq: 0,
         }
     }
 
     pub fn selected_channel(&self) -> Option<&Channel> {
         self.channels.as_ref().and_then(|c| c.get(self.selected))
+    }
+
+    /// Builds a `LoadMessages` command and records it as the latest
+    /// outstanding request for `channel_id`, so a response can later be
+    /// checked for staleness against whatever request superseded it.
+    fn request_messages(&mut self, channel_id: String) -> Command {
+        self.next_seq += 1;
+        self.message_request_seq
+            .insert(channel_id.clone(), self.next_seq);
+        Command::LoadMessages {
+            channel_id,
+            seq: self.next_seq,
+        }
     }
 }
 
@@ -83,7 +105,7 @@ pub enum Screen {
     /// docs/api-contract.md — pending or rejected, the server doesn't
     /// distinguish in the message).
     NotApproved,
-    LoggedIn(LoggedInState),
+    LoggedIn(Box<LoggedInState>),
 }
 
 #[derive(Debug)]
@@ -189,10 +211,8 @@ impl AppState {
             }
             KeyCode::Char('l') => Some(Command::Logout),
             KeyCode::Char('r') => {
-                let channel = state.selected_channel()?;
-                Some(Command::LoadMessages {
-                    channel_id: channel.id.clone(),
-                })
+                let channel_id = state.selected_channel()?.id.clone();
+                Some(state.request_messages(channel_id))
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if state.selected > 0 {
@@ -241,20 +261,18 @@ impl AppState {
         }
     }
 
-    fn load_selected(state: &LoggedInState) -> Option<Command> {
-        let channel = state.selected_channel()?;
-        if state.messages.contains_key(&channel.id) {
+    fn load_selected(state: &mut LoggedInState) -> Option<Command> {
+        let channel_id = state.selected_channel()?.id.clone();
+        if state.messages.contains_key(&channel_id) {
             return None;
         }
-        Some(Command::LoadMessages {
-            channel_id: channel.id.clone(),
-        })
+        Some(state.request_messages(channel_id))
     }
 
     pub fn on_resume_finished(&mut self, user: Option<User>) -> Option<Command> {
         match user {
             Some(user) => {
-                self.screen = Screen::LoggedIn(LoggedInState::new(user));
+                self.screen = Screen::LoggedIn(Box::new(LoggedInState::new(user)));
                 Some(Command::LoadChannels)
             }
             None => {
@@ -271,7 +289,7 @@ impl AppState {
     pub fn on_login_finished(&mut self, result: Result<User, ApiError>) -> Option<Command> {
         match result {
             Ok(user) => {
-                self.screen = Screen::LoggedIn(LoggedInState::new(user));
+                self.screen = Screen::LoggedIn(Box::new(LoggedInState::new(user)));
                 Some(Command::LoadChannels)
             }
             Err(ApiError::NotApproved) => {
@@ -296,9 +314,15 @@ impl AppState {
         };
         match result {
             Ok(channels) => {
-                let first = channels.first().map(|c| c.id.clone());
+                // Keep whatever was selected (clamped to the new list, which
+                // may have shrunk/reordered) rather than always jumping back
+                // to the first channel — this reload also fires on a live
+                // `channels.changed`/`resync` event while the user is reading
+                // something else.
+                state.selected = state.selected.min(channels.len().saturating_sub(1));
                 state.channels = Some(channels);
-                first.map(|channel_id| Command::LoadMessages { channel_id })
+                let channel_id = state.selected_channel().map(|channel| channel.id.clone());
+                channel_id.map(|id| state.request_messages(id))
             }
             Err(error) => {
                 state.status = Some(format!("Couldn't load channels: {error}"));
@@ -316,11 +340,18 @@ impl AppState {
     pub fn on_messages_loaded(
         &mut self,
         channel_id: String,
+        seq: u64,
         result: Result<Vec<Message>, ApiError>,
     ) {
         let Screen::LoggedIn(state) = &mut self.screen else {
             return;
         };
+        // A newer request for this same channel is still outstanding (or has
+        // already been answered) — this response lost the race, so drop it
+        // rather than let it clobber fresher data (#51).
+        if state.message_request_seq.get(&channel_id) != Some(&seq) {
+            return;
+        }
         state.loading_messages = false;
         match result {
             Ok(messages) => {
@@ -350,7 +381,7 @@ impl AppState {
                 // refetch is simple and correct without SSE to reconcile
                 // against yet (see #57).
                 state.messages.remove(&channel_id);
-                Some(Command::LoadMessages { channel_id })
+                Some(state.request_messages(channel_id))
             }
             Err(error) => {
                 state.status = Some(format!("Couldn't send message: {error}"));
@@ -361,6 +392,31 @@ impl AppState {
 
     pub fn on_logout(&mut self) {
         self.screen = Screen::LoggedOut(LoginForm::new());
+    }
+
+    /// A live event from `GET /api/v1/stream` (#57). Only reacts to the
+    /// kinds this prototype actually renders (channels, messages) — anything
+    /// else (typing, presence, reactions, mentions, read receipts,
+    /// users/settings changes) is `RealtimeEvent::Other` and ignored here.
+    pub fn on_realtime_event(&mut self, event: RealtimeEvent) -> Option<Command> {
+        let Screen::LoggedIn(state) = &mut self.screen else {
+            return None;
+        };
+        match event {
+            RealtimeEvent::Ready | RealtimeEvent::Other => None,
+            // A full reload naturally re-requests the selected channel's
+            // messages too, via on_channels_loaded.
+            RealtimeEvent::Resync | RealtimeEvent::ChannelsChanged => Some(Command::LoadChannels),
+            RealtimeEvent::MessageCreated { channel_id }
+            | RealtimeEvent::MessageUpdated { channel_id }
+            | RealtimeEvent::MessageDeleted { channel_id } => {
+                if state.selected_channel().is_some_and(|c| c.id == channel_id) {
+                    Some(state.request_messages(channel_id))
+                } else {
+                    None
+                }
+            }
+        }
     }
 }
 
@@ -444,7 +500,7 @@ mod tests {
 
         let command = state.on_key(key(KeyCode::Down));
         match command {
-            Some(Command::LoadMessages { channel_id }) => assert_eq!(channel_id, "c2"),
+            Some(Command::LoadMessages { channel_id, .. }) => assert_eq!(channel_id, "c2"),
             other => panic!("expected LoadMessages, got {other:?}"),
         }
     }
@@ -525,8 +581,118 @@ mod tests {
         };
         assert_eq!(logged_in.compose, "");
         assert!(
-            matches!(command, Some(Command::LoadMessages { channel_id }) if channel_id == "c1")
+            matches!(command, Some(Command::LoadMessages { channel_id, .. }) if channel_id == "c1")
         );
+    }
+
+    #[test]
+    fn a_message_event_for_the_selected_channel_reloads_it() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+        let command = state.on_realtime_event(RealtimeEvent::MessageCreated {
+            channel_id: "c1".to_string(),
+        });
+        assert!(
+            matches!(command, Some(Command::LoadMessages { channel_id, .. }) if channel_id == "c1")
+        );
+    }
+
+    #[test]
+    fn a_message_event_for_a_different_channel_is_ignored() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+        let command = state.on_realtime_event(RealtimeEvent::MessageCreated {
+            channel_id: "c2".to_string(),
+        });
+        assert!(command.is_none());
+    }
+
+    #[test]
+    fn resync_and_channels_changed_reload_channels() {
+        let mut state = logged_in_with_channels(["General"]);
+        assert!(matches!(
+            state.on_realtime_event(RealtimeEvent::Resync),
+            Some(Command::LoadChannels)
+        ));
+        assert!(matches!(
+            state.on_realtime_event(RealtimeEvent::ChannelsChanged),
+            Some(Command::LoadChannels)
+        ));
+        assert!(state.on_realtime_event(RealtimeEvent::Ready).is_none());
+        assert!(state.on_realtime_event(RealtimeEvent::Other).is_none());
+    }
+
+    #[test]
+    fn reloading_channels_keeps_the_selection_instead_of_jumping_to_the_first() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+        state.on_key(key(KeyCode::Down)); // select "Random" (c2)
+
+        // A channels reload (e.g. from a realtime `channels.changed`) must
+        // keep reloading messages for "Random", not silently reset to
+        // "General" — this was a real bug caught while adding SSE support.
+        let command = state.on_channels_loaded(Ok(vec![
+            Channel {
+                id: "c1".into(),
+                name: "General".into(),
+                description: None,
+                is_private: false,
+                is_archived: false,
+                is_favorite: false,
+                unread_count: 0,
+            },
+            Channel {
+                id: "c2".into(),
+                name: "Random".into(),
+                description: None,
+                is_private: false,
+                is_archived: false,
+                is_favorite: false,
+                unread_count: 0,
+            },
+        ]));
+        assert!(
+            matches!(command, Some(Command::LoadMessages { channel_id, .. }) if channel_id == "c2")
+        );
+    }
+
+    #[test]
+    fn a_stale_messages_response_is_dropped_in_favor_of_the_newer_request() {
+        let mut state = logged_in_with_channels(["General"]);
+
+        // Two overlapping requests for the same channel (e.g. a manual
+        // refresh followed immediately by an SSE-triggered reload) — the
+        // second is issued after the first, so it's the "newer" one.
+        let first = state.on_key(key(KeyCode::Char('r')));
+        let second = state.on_key(key(KeyCode::Char('r')));
+        let (
+            Some(Command::LoadMessages { seq: first_seq, .. }),
+            Some(Command::LoadMessages {
+                seq: second_seq, ..
+            }),
+        ) = (first, second)
+        else {
+            panic!("expected two LoadMessages commands");
+        };
+        assert_ne!(first_seq, second_seq);
+
+        // The newer request's response arrives first and is accepted...
+        state.on_messages_loaded("c1".to_string(), second_seq, Ok(vec![]));
+        // ...then the older, slower response arrives and must be ignored,
+        // not overwrite the newer (already-applied) result.
+        state.on_messages_loaded(
+            "c1".to_string(),
+            first_seq,
+            Err(ApiError::Server(
+                "stale failure, should be ignored".to_string(),
+            )),
+        );
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(
+            logged_in.status.is_none(),
+            "the stale error must not surface"
+        );
+        assert!(logged_in.messages.get("c1").is_some_and(Vec::is_empty));
     }
 
     /// A logged-in state with N channels named `c1..cN`, ready for

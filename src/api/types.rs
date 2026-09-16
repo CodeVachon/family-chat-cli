@@ -86,3 +86,41 @@ pub struct Message {
 pub struct MessagesResponse {
     pub messages: Vec<Message>,
 }
+
+/// The `GET /api/v1/stream` payload (see docs/api-contract.md). Every event
+/// arrives as a default-`message` SSE frame with its `type` inside the JSON
+/// body, so this is what a `MessageEvent.data` deserializes into — not tied
+/// to the SSE `event:` field at all.
+///
+/// Only the kinds this prototype acts on get their own variant; everything
+/// else (typing, presence, reactions, mentions, read receipts, users/settings
+/// changes — nothing the TUI renders yet) falls into `Other` and is ignored.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub enum RealtimeEvent {
+    #[serde(rename = "ready")]
+    Ready,
+    /// The broker reconnected to Postgres and may have missed notifications
+    /// — refetch anything being tracked rather than trust local state.
+    #[serde(rename = "resync")]
+    Resync,
+    #[serde(rename = "channels.changed")]
+    ChannelsChanged,
+    #[serde(rename = "message.created")]
+    MessageCreated {
+        #[serde(rename = "channelId")]
+        channel_id: String,
+    },
+    #[serde(rename = "message.updated")]
+    MessageUpdated {
+        #[serde(rename = "channelId")]
+        channel_id: String,
+    },
+    #[serde(rename = "message.deleted")]
+    MessageDeleted {
+        #[serde(rename = "channelId")]
+        channel_id: String,
+    },
+    #[serde(other)]
+    Other,
+}

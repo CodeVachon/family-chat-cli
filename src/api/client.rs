@@ -127,6 +127,13 @@ impl ApiClient {
             Err(ApiError::from_response(response).await)
         }
     }
+
+    /// An authenticated, unsent request for `GET /api/v1/stream` — handed to
+    /// `reqwest_eventsource::EventSource`, which owns actually sending it
+    /// (and re-sending it on reconnect).
+    pub(crate) fn stream_request(&self) -> reqwest::RequestBuilder {
+        self.authed(self.http.get(self.url("/api/v1/stream")))
+    }
 }
 
 #[cfg(test)]

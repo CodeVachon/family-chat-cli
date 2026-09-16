@@ -16,7 +16,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, RealtimeStream};
 use crate::app::{AppState, Command, Event};
 use crate::auth::{CredentialStore, login};
 
@@ -55,6 +55,10 @@ async fn run_app(
     let mut state = AppState::resuming();
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     let mut crossterm_events = EventStream::new();
+    // Started once per login session (see the `LoadChannels` arm below) and
+    // torn down on logout — otherwise a dead/rejected token would leave a
+    // stream perpetually retrying against a session that's gone.
+    let mut realtime_task: Option<tokio::task::JoinHandle<()>> = None;
 
     spawn_resume(client.clone(), store.clone(), tx.clone());
     terminal.draw(|frame| widgets::render(frame, &state))?;
@@ -74,11 +78,12 @@ async fn run_app(
                 Some(Event::ResumeFinished(user)) => state.on_resume_finished(user),
                 Some(Event::LoginFinished(result)) => state.on_login_finished(result),
                 Some(Event::ChannelsLoaded(result)) => state.on_channels_loaded(result),
-                Some(Event::MessagesLoaded { channel_id, result }) => {
-                    state.on_messages_loaded(channel_id, result);
+                Some(Event::MessagesLoaded { channel_id, seq, result }) => {
+                    state.on_messages_loaded(channel_id, seq, result);
                     None
                 }
                 Some(Event::MessageSent { channel_id, result }) => state.on_message_sent(channel_id, result),
+                Some(Event::Realtime(event)) => state.on_realtime_event(event),
                 None => None,
             },
         };
@@ -90,16 +95,28 @@ async fn run_app(
                     state.on_login_submitted();
                     spawn_login(client.clone(), store.clone(), tx.clone(), email, password);
                 }
-                Command::LoadChannels => spawn_load_channels(client.clone(), tx.clone()),
-                Command::LoadMessages { channel_id } => {
+                Command::LoadChannels => {
+                    spawn_load_channels(client.clone(), tx.clone());
+                    // `LoadChannels` also fires from realtime resync/change
+                    // events (see app::state::on_realtime_event) — only
+                    // start the stream itself the first time, on the
+                    // login/resume transition into this screen.
+                    if realtime_task.is_none() {
+                        realtime_task = Some(spawn_realtime(client.clone(), tx.clone()));
+                    }
+                }
+                Command::LoadMessages { channel_id, seq } => {
                     state.on_messages_loading();
-                    spawn_load_messages(client.clone(), tx.clone(), channel_id);
+                    spawn_load_messages(client.clone(), tx.clone(), channel_id, seq);
                 }
                 Command::SendMessage { channel_id, body } => {
                     spawn_send_message(client.clone(), tx.clone(), channel_id, body);
                 }
                 Command::Logout => {
                     state.on_logout();
+                    if let Some(task) = realtime_task.take() {
+                        task.abort();
+                    }
                     spawn_logout(client.clone(), store.clone());
                 }
             }
@@ -153,14 +170,23 @@ fn spawn_load_channels(client: ApiClient, tx: mpsc::UnboundedSender<Event>) {
     });
 }
 
-fn spawn_load_messages(client: ApiClient, tx: mpsc::UnboundedSender<Event>, channel_id: String) {
+fn spawn_load_messages(
+    client: ApiClient,
+    tx: mpsc::UnboundedSender<Event>,
+    channel_id: String,
+    seq: u64,
+) {
     tokio::spawn(async move {
         let result = client
             .channel_messages(&channel_id)
             .await
             .map(|response| response.messages);
         log_if_err("load messages", &result);
-        let _ = tx.send(Event::MessagesLoaded { channel_id, result });
+        let _ = tx.send(Event::MessagesLoaded {
+            channel_id,
+            seq,
+            result,
+        });
     });
 }
 
@@ -176,6 +202,27 @@ fn spawn_send_message(
         log_if_err("send message", &result);
         let _ = tx.send(Event::MessageSent { channel_id, result });
     });
+}
+
+fn spawn_realtime(
+    client: ApiClient,
+    tx: mpsc::UnboundedSender<Event>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut stream = match RealtimeStream::connect(&client) {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::error!(%error, "could not start the realtime stream");
+                return;
+            }
+        };
+        while let Some(event) = stream.next().await {
+            if tx.send(Event::Realtime(event)).is_err() {
+                return; // the main loop is gone; nothing left to deliver to.
+            }
+        }
+        tracing::info!("realtime stream ended (won't retry — see RealtimeStream::next)");
+    })
 }
 
 fn spawn_logout(client: ApiClient, store: Arc<dyn CredentialStore>) {

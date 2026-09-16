@@ -2,7 +2,7 @@
 //! (async side effects the pure state layer asks the loop to perform) (#12/#27).
 
 use crate::api::ApiError;
-use crate::api::types::{Channel, Message, User};
+use crate::api::types::{Channel, Message, RealtimeEvent, User};
 
 /// Results of async work started by a `Command`, delivered back to the main
 /// loop over an mpsc channel. Terminal key events don't go through here —
@@ -15,12 +15,14 @@ pub enum Event {
     ChannelsLoaded(Result<Vec<Channel>, ApiError>),
     MessagesLoaded {
         channel_id: String,
+        seq: u64,
         result: Result<Vec<Message>, ApiError>,
     },
     MessageSent {
         channel_id: String,
         result: Result<(), ApiError>,
     },
+    Realtime(RealtimeEvent),
 }
 
 /// An async side effect the state layer needs performed. Kept separate from
@@ -30,7 +32,7 @@ pub enum Event {
 pub enum Command {
     SubmitLogin { email: String, password: String },
     LoadChannels,
-    LoadMessages { channel_id: String },
+    LoadMessages { channel_id: String, seq: u64 },
     SendMessage { channel_id: String, body: String },
     Logout,
     Quit,

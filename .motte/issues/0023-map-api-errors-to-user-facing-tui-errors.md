@@ -1,13 +1,12 @@
 ---
 id: 23
 title: Map API errors to user-facing TUI errors
-state: In Progress
+state: Todo
 parent: 4
-assignee: Christopher Vachon
 labels: [task, api]
 blockedBy: [20]
 created: 2026-08-25T21:38:34Z
-updated: 2026-09-16T20:33:01Z
+updated: 2026-09-16T20:45:37Z
 ---
 
 ## Description

@@ -61,3 +61,12 @@
 {"at":"2026-09-16T20:18:49Z","id":25,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-16T20:32:02Z","id":23,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
 {"at":"2026-09-16T20:32:02Z","id":23,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T20:40:41Z","id":57,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T20:40:41Z","id":57,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T20:40:55Z","id":57,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-16T20:45:03Z","id":51,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-16T20:45:03Z","id":51,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-16T20:45:25Z","id":51,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Todo"}
+{"at":"2026-09-16T20:45:25Z","id":51,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
+{"at":"2026-09-16T20:45:37Z","id":23,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Todo"}
+{"at":"2026-09-16T20:45:37Z","id":23,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
