@@ -1,12 +1,13 @@
 ---
 id: 23
 title: Map API errors to user-facing TUI errors
-state: Todo
+state: In Progress
 parent: 4
+assignee: Christopher Vachon
 labels: [task, api]
 blockedBy: [20]
 created: 2026-08-25T21:38:34Z
-updated: 2026-09-16T19:57:20Z
+updated: 2026-09-16T20:33:01Z
 ---
 
 ## Description
@@ -22,3 +23,7 @@ Define display-ready error categories for offline, unauthorized, forbidden, vali
 ### 2026-09-16T19:57:20Z — Christopher Vachon (user)
 
 Partial, as a byproduct of #20/#15: ApiError has display-ready Server/Unauthorized/NotApproved/Forbidden/Request(network) variants, and login-time errors show the server's own message (see #15's note on the from_auth_response vs from_response split). Not yet covered: a distinct 'validation' (422 + issues) category — nothing in this prototype posts data yet, so no caller produces a 422 to design against. Natural to pick this back up alongside #31 (compose and send messages), which will be the first thing that can 422.
+
+### 2026-09-16T20:33:01Z — Christopher Vachon (user)
+
+Added error logging (src/tui/mod.rs's log_if_err, used by every spawn_* command) so a failed command is diagnosable from the log file afterward — this was the actual gap when #31's send-message bug first showed up as an opaque 'server error' with nothing in the log to explain it. login::resume also now logs why a stored session was dropped. Display-ready error categories (Server/Unauthorized/NotApproved/Forbidden/Request) are otherwise unchanged from the #20 note — still no distinct 'validation' category, still nothing to post 422s against yet.

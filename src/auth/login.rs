@@ -24,12 +24,14 @@ pub async fn sign_in(
     })
 }
 
-pub async fn sign_out(client: &ApiClient, store: &dyn CredentialStore) {
-    // Best-effort: proceed with local cleanup even if the server call fails
-    // (e.g. offline) — see #17.
-    let _ = client.sign_out().await;
+/// Best-effort: proceed with local cleanup even if the server call fails
+/// (e.g. offline) — see #17. The `Result` is so the caller can still log the
+/// server-side failure; it isn't meant to change what the caller does next.
+pub async fn sign_out(client: &ApiClient, store: &dyn CredentialStore) -> Result<(), ApiError> {
+    let result = client.sign_out().await;
     client.set_token(None);
     store.clear();
+    result
 }
 
 /// Resume a session from a stored token, if one exists and is still valid.
@@ -40,7 +42,8 @@ pub async fn resume(client: &ApiClient, store: &dyn CredentialStore) -> Option<U
     client.set_token(Some(token));
     match client.me().await {
         Ok(response) => Some(response.user),
-        Err(_) => {
+        Err(error) => {
+            tracing::info!(%error, "stored session is no longer valid, dropping it");
             client.set_token(None);
             store.clear();
             None

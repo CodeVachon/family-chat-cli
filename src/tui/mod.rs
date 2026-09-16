@@ -137,6 +137,7 @@ fn spawn_login(
         let result = login::sign_in(&client, &*store, &email, &password)
             .await
             .map(|session| session.user);
+        log_if_err("sign in", &result);
         let _ = tx.send(Event::LoginFinished(result));
     });
 }
@@ -147,6 +148,7 @@ fn spawn_load_channels(client: ApiClient, tx: mpsc::UnboundedSender<Event>) {
             .list_channels()
             .await
             .map(|response| response.channels);
+        log_if_err("load channels", &result);
         let _ = tx.send(Event::ChannelsLoaded(result));
     });
 }
@@ -157,6 +159,7 @@ fn spawn_load_messages(client: ApiClient, tx: mpsc::UnboundedSender<Event>, chan
             .channel_messages(&channel_id)
             .await
             .map(|response| response.messages);
+        log_if_err("load messages", &result);
         let _ = tx.send(Event::MessagesLoaded { channel_id, result });
     });
 }
@@ -170,12 +173,24 @@ fn spawn_send_message(
     tokio::spawn(async move {
         let html = crate::text::html::plain_text_to_html(&body);
         let result = client.send_message(&channel_id, &html).await;
+        log_if_err("send message", &result);
         let _ = tx.send(Event::MessageSent { channel_id, result });
     });
 }
 
 fn spawn_logout(client: ApiClient, store: Arc<dyn CredentialStore>) {
     tokio::spawn(async move {
-        login::sign_out(&client, &*store).await;
+        let result = login::sign_out(&client, &*store).await;
+        log_if_err("sign out", &result);
     });
+}
+
+/// Every API-backed command logs its own failure here (to the log file, never
+/// the terminal — see `main::init_logging`) so a "server error" in the status
+/// line is diagnosable afterward without re-running with `RUST_LOG=debug`.
+/// This is what was missing when #31's send-message 500 first showed up.
+fn log_if_err<T>(what: &'static str, result: &Result<T, crate::api::ApiError>) {
+    if let Err(error) = result {
+        tracing::warn!(what, %error, "command failed");
+    }
 }
