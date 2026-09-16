@@ -190,18 +190,29 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
             .and_then(|c| state.messages.get(&c.id))
         {
             Some(messages) if messages.is_empty() => "No messages yet.".to_string(),
-            Some(messages) => messages
-                .iter()
-                .map(|message| {
-                    format!(
-                        "[{}] {}: {}",
-                        message.created_at.format("%H:%M"),
-                        message.author.display_name(),
-                        html::to_plain_text(&message.body)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
+            Some(messages) => {
+                let full = messages
+                    .iter()
+                    .map(|message| {
+                        format!(
+                            "[{}] {}: {}",
+                            message.created_at.format("%H:%M"),
+                            message.author.display_name(),
+                            html::to_plain_text(&message.body)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                // Window to the pane's visible height, anchored to the
+                // bottom (latest) minus however far `message_scroll` has
+                // paged up — otherwise a channel with more history than
+                // fits would just clip the newest messages off the bottom
+                // with no way to see them. Counts raw lines rather than
+                // post-wrap rendered rows, so a single very long line can
+                // still push things off by a row or two; an acceptable
+                // approximation for how short most chat messages are.
+                windowed(&full, visible_rows(messages_area), state.message_scroll)
+            }
             None => String::new(),
         }
     };
@@ -237,11 +248,29 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
 
     let status = state.status.clone().unwrap_or_else(|| {
         format!(
-            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · Enter send · r refresh · l logout · q quit",
+            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · Enter send · r refresh · l logout · q quit",
             state.user.name
         )
     });
     frame.render_widget(Paragraph::new(status), layout.status);
+}
+
+/// A bordered pane's inner content height.
+fn visible_rows(area: Rect) -> usize {
+    area.height.saturating_sub(2) as usize
+}
+
+/// The last `height` lines of `text`, offset upward by `scroll` lines —
+/// i.e. what a bottom-anchored, scroll-up-for-history pane shows. `scroll`
+/// is clamped so scrolling past the start shows the first page rather than
+/// going blank (state::AppState doesn't know the line count when it tracks
+/// `message_scroll`, so it can't clamp on that side).
+fn windowed(text: &str, height: usize, scroll: usize) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let scroll = scroll.min(lines.len().saturating_sub(height));
+    let end = lines.len() - scroll;
+    let start = end.saturating_sub(height);
+    lines[start..end].join("\n")
 }
 
 fn focus_style(focused: bool) -> Style {
@@ -249,5 +278,128 @@ fn focus_style(focused: bool) -> Style {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shows_the_tail_when_content_overflows_the_pane() {
+        let text = "1\n2\n3\n4\n5";
+        assert_eq!(windowed(text, 3, 0), "3\n4\n5");
+    }
+
+    #[test]
+    fn scrolling_up_shows_older_lines() {
+        let text = "1\n2\n3\n4\n5";
+        assert_eq!(windowed(text, 3, 2), "1\n2\n3");
+    }
+
+    #[test]
+    fn scrolling_past_the_start_clamps_rather_than_panics() {
+        let text = "1\n2\n3";
+        assert_eq!(windowed(text, 3, 100), "1\n2\n3");
+    }
+
+    #[test]
+    fn short_content_is_shown_in_full() {
+        let text = "1\n2";
+        assert_eq!(windowed(text, 10, 0), "1\n2");
+    }
+
+    // Full-render checks against a synthetic (never real-account) fixture —
+    // this is what actually caught that overflowing history was clipping
+    // the newest messages off the bottom with no way to scroll to them.
+
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::api::types::{Channel, Message, MessageAuthor, User};
+    use crate::app::{AppState, Command};
+
+    fn logged_in_state_with_messages(count: usize) -> AppState {
+        let mut state = AppState::resuming();
+        state.on_resume_finished(Some(User {
+            id: "u1".into(),
+            name: "Chris".into(),
+            email: "chris@example.com".into(),
+            approval_status: "approved".into(),
+        }));
+        let channels = vec![Channel {
+            id: "c1".into(),
+            name: "General".into(),
+            description: None,
+            is_private: false,
+            is_archived: false,
+            is_favorite: false,
+            unread_count: 0,
+        }];
+        let Some(Command::LoadMessages { seq, .. }) = state.on_channels_loaded(Ok(channels)) else {
+            panic!("expected the initial channel load to request messages");
+        };
+        let messages = (0..count)
+            .map(|i| Message {
+                id: format!("m{i}"),
+                kind: "user".to_string(),
+                body: format!("<p>msg-{i}</p>"),
+                created_at: Utc::now(),
+                deleted_at: None,
+                author: MessageAuthor {
+                    name: "Chris".to_string(),
+                    preferences: None,
+                },
+            })
+            .collect();
+        state.on_messages_loaded("c1".to_string(), seq, Ok(messages));
+        state
+    }
+
+    fn render_to_text(state: &AppState, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        // `draw()`'s return value carries the buffer that was just rendered
+        // into — NOT `current_buffer_mut()` afterward, which by then points
+        // at the *other*, freshly-reset buffer post-swap.
+        let frame = terminal.draw(|frame| render(frame, state)).unwrap();
+        let buffer = frame.buffer;
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn overflowing_history_shows_the_latest_messages_by_default() {
+        let state = logged_in_state_with_messages(20);
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("msg-19"),
+            "should show the latest message:\n{content}"
+        );
+        assert!(
+            !content.contains("msg-0"),
+            "should not show the oldest message without scrolling:\n{content}"
+        );
+    }
+
+    #[test]
+    fn page_up_reveals_older_messages() {
+        let mut state = logged_in_state_with_messages(20);
+        // Enough presses to reach the very top regardless of the exact step size.
+        for _ in 0..5 {
+            state.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        }
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("msg-0"),
+            "scrolling up should reveal the oldest message:\n{content}"
+        );
     }
 }

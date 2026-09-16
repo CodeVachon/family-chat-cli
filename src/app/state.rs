@@ -50,6 +50,12 @@ pub struct LoggedInState {
     pub focus: LoggedInFocus,
     pub compose: String,
     pub sending: bool,
+    /// Lines scrolled up from the latest message (0 = showing the latest —
+    /// see `tui::widgets` for how this windows the rendered history). Reset
+    /// to 0 whenever the selected channel changes or fresh messages land, so
+    /// the pane always opens on the newest content, matching ordinary chat
+    /// UX (see #49).
+    pub message_scroll: usize,
     /// The most recent request sequence number issued per channel — lets
     /// `on_messages_loaded` reject a stale response that lost the race
     /// against a newer request for the same channel (manual refresh, a
@@ -71,6 +77,7 @@ impl LoggedInState {
             focus: LoggedInFocus::Channels,
             compose: String::new(),
             sending: false,
+            message_scroll: 0,
             message_request_seq: HashMap::new(),
             next_seq: 0,
         }
@@ -180,11 +187,30 @@ impl AppState {
         }
     }
 
+    /// Lines moved per `PageUp`/`PageDown` — a fixed step rather than a true
+    /// screen-height, since the pure state layer doesn't know the terminal
+    /// size (that's `tui::widgets`' job at render time).
+    const SCROLL_STEP: usize = 10;
+
     fn on_logged_in_key(
         state: &mut LoggedInState,
         key: KeyEvent,
         should_quit: &mut bool,
     ) -> Option<Command> {
+        // Scrolling message history works from either focus — it's not text
+        // input, so there's no ambiguity with typing into the composer.
+        match key.code {
+            KeyCode::PageUp => {
+                state.message_scroll = state.message_scroll.saturating_add(Self::SCROLL_STEP);
+                return None;
+            }
+            KeyCode::PageDown => {
+                state.message_scroll = state.message_scroll.saturating_sub(Self::SCROLL_STEP);
+                return None;
+            }
+            _ => {}
+        }
+
         if key.code == KeyCode::Tab {
             state.focus = match state.focus {
                 LoggedInFocus::Channels => LoggedInFocus::Compose,
@@ -217,6 +243,7 @@ impl AppState {
             KeyCode::Up | KeyCode::Char('k') => {
                 if state.selected > 0 {
                     state.selected -= 1;
+                    state.message_scroll = 0;
                     return Self::load_selected(state);
                 }
                 None
@@ -225,6 +252,7 @@ impl AppState {
                 let len = state.channels.as_ref().map_or(0, Vec::len);
                 if state.selected + 1 < len {
                     state.selected += 1;
+                    state.message_scroll = 0;
                     return Self::load_selected(state);
                 }
                 None
@@ -356,6 +384,7 @@ impl AppState {
         match result {
             Ok(messages) => {
                 state.messages.insert(channel_id, messages);
+                state.message_scroll = 0;
             }
             Err(error) => {
                 state.status = Some(format!("Couldn't load messages: {error}"));
