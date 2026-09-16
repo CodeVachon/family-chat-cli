@@ -1,0 +1,238 @@
+//! `ApiClient`: base URL + bearer token + JSON request helpers (#20).
+
+use std::sync::{Arc, RwLock};
+
+use reqwest::Client;
+use serde::de::DeserializeOwned;
+
+use super::error::ApiError;
+use super::types::{ChannelsResponse, MeResponse, MessagesResponse, SignInResponse};
+
+#[derive(Clone)]
+pub struct ApiClient {
+    http: Client,
+    base_url: Arc<str>,
+    token: Arc<RwLock<Option<String>>>,
+}
+
+impl ApiClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            http: Client::builder()
+                .user_agent(concat!("family-chat-cli/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client builds with no custom TLS config"),
+            base_url: Arc::from(base_url.into()),
+            token: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub fn set_token(&self, token: Option<String>) {
+        *self.token.write().expect("token lock poisoned") = token;
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base_url)
+    }
+
+    fn authed(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let token = self.token.read().expect("token lock poisoned").clone();
+        match token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    }
+
+    async fn json_or_error<T: DeserializeOwned>(
+        response: reqwest::Response,
+    ) -> Result<T, ApiError> {
+        if response.status().is_success() {
+            Ok(response.json::<T>().await?)
+        } else {
+            Err(ApiError::from_response(response).await)
+        }
+    }
+
+    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+        let response = self.authed(self.http.get(self.url(path))).send().await?;
+        Self::json_or_error(response).await
+    }
+
+    /// `POST /api/auth/sign-in/email` — not under `/api/v1`, and not bearer-authed
+    /// (there's no session yet). On success the response carries the session token
+    /// directly in its JSON body (confirmed against the Better Auth source; the
+    /// `set-auth-token` header carries the same value but the body is simpler to read).
+    pub async fn sign_in_email(
+        &self,
+        email: &str,
+        password: &str,
+    ) -> Result<SignInResponse, ApiError> {
+        let response = self
+            .http
+            .post(self.url("/api/auth/sign-in/email"))
+            .json(&serde_json::json!({ "email": email, "password": password }))
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(response.json::<SignInResponse>().await?)
+        } else {
+            Err(ApiError::from_auth_response(response).await)
+        }
+    }
+
+    /// `POST /api/auth/sign-out` — best-effort; callers should clear local
+    /// credentials regardless of whether this succeeds (see #17).
+    pub async fn sign_out(&self) -> Result<(), ApiError> {
+        let response = self
+            .authed(self.http.post(self.url("/api/auth/sign-out")))
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::from_auth_response(response).await)
+        }
+    }
+
+    pub async fn me(&self) -> Result<MeResponse, ApiError> {
+        self.get("/api/v1/me").await
+    }
+
+    pub async fn list_channels(&self) -> Result<ChannelsResponse, ApiError> {
+        self.get("/api/v1/channels").await
+    }
+
+    pub async fn channel_messages(&self, channel_id: &str) -> Result<MessagesResponse, ApiError> {
+        self.get(&format!("/api/v1/channels/{channel_id}/messages"))
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    /// Exercises the real (de)serialization against payloads shaped like the
+    /// actual server (see docs/api-contract.md), not just hand-picked field
+    /// names — this is what caught #48's `set-auth-token` vs body-`token`
+    /// question and the sign-in error message bug during manual testing.
+    #[tokio::test]
+    async fn sign_in_parses_the_token_and_user_from_the_response_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/sign-in/email"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "redirect": false,
+                "token": "tok_abc123",
+                "url": null,
+                "user": {
+                    "id": "u1",
+                    "name": "Chris",
+                    "email": "chris@example.com",
+                    "approvalStatus": "approved"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let response = client
+            .sign_in_email("chris@example.com", "hunter2")
+            .await
+            .unwrap();
+
+        assert_eq!(response.token, "tok_abc123");
+        assert_eq!(response.user.name, "Chris");
+        assert_eq!(response.user.approval_status, "approved");
+    }
+
+    #[tokio::test]
+    async fn sign_in_surfaces_the_servers_own_error_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/sign-in/email"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "Invalid email or password",
+                "code": "INVALID_EMAIL_OR_PASSWORD"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let error = client
+            .sign_in_email("chris@example.com", "wrong")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "Invalid email or password");
+    }
+
+    #[tokio::test]
+    async fn authenticated_calls_send_the_bearer_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/channels"))
+            .and(header("Authorization", "Bearer tok_abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "channels": [
+                    {
+                        "id": "c1",
+                        "name": "General",
+                        "description": null,
+                        "isPrivate": false,
+                        "isArchived": false,
+                        "isFavorite": true,
+                        "unreadCount": 3
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        client.set_token(Some("tok_abc123".to_string()));
+        let response = client.list_channels().await.unwrap();
+
+        assert_eq!(response.channels.len(), 1);
+        assert_eq!(response.channels[0].name, "General");
+        assert_eq!(response.channels[0].unread_count, 3);
+    }
+
+    #[tokio::test]
+    async fn messages_parse_nested_author_and_timestamps() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [
+                    {
+                        "id": "m1",
+                        "type": "user",
+                        "body": "<p>Hello <strong>family</strong></p>",
+                        "createdAt": "2026-09-16T12:34:56.000Z",
+                        "deletedAt": null,
+                        "author": {
+                            "name": "Chris",
+                            "preferences": { "displayName": "Dad" }
+                        }
+                    }
+                ],
+                "hasMore": false
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let response = client.channel_messages("c1").await.unwrap();
+
+        assert_eq!(response.messages.len(), 1);
+        assert_eq!(response.messages[0].author.display_name(), "Dad");
+        assert_eq!(
+            response.messages[0].created_at.to_rfc3339(),
+            "2026-09-16T12:34:56+00:00"
+        );
+    }
+}
