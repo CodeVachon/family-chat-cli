@@ -1,11 +1,11 @@
 ---
 id: 3
 title: "Epic: Better Auth email/password login"
-state: Todo
+state: Done
 parent: 1
 labels: [epic, auth]
 created: 2026-08-25T21:37:48Z
-updated: 2026-09-16T19:02:52Z
+updated: 2026-09-17T17:42:29Z
 ---
 
 ## Description
@@ -21,3 +21,7 @@ Confirmed 2026-09-16: email+password is the chosen flow (Chris's call — this i
 ### 2026-09-16T18:52:12Z — Christopher Vachon (user)
 
 Contract inventory (see #48, docs/api-contract.md) found the deployed Better Auth server has no OAuth/device-authorization plugin — only bearer(), magicLink(), and passkey(). This epic's title/plan assumed a device grant that doesn't exist server-side. Needs a decision: email+password bearer flow (simplest, pending confirmation the account has a password), a magic-link loopback trick, or adding a device-auth plugin server-side (out of this repo's control). Blocking #14/#15/#17 until decided.
+
+### 2026-09-17T17:42:28Z — Christopher Vachon (user)
+
+All child issues (14/15/16/17/18/52/55) are Done.
