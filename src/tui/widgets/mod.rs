@@ -198,11 +198,13 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
                 // bottom (latest) minus however far `message_scroll` has
                 // paged up — otherwise a channel with more history than
                 // fits would just clip the newest messages off the bottom
-                // with no way to see them. Counts raw lines rather than
-                // post-wrap rendered rows, so a single very long line can
-                // still push things off by a row or two; an acceptable
-                // approximation for how short most chat messages are.
-                windowed(all_lines, visible_rows(messages_area), state.message_scroll)
+                // with no way to see them.
+                windowed(
+                    all_lines,
+                    visible_cols(messages_area),
+                    visible_rows(messages_area),
+                    state.message_scroll,
+                )
             }
             None => vec![],
         }
@@ -251,15 +253,45 @@ fn visible_rows(area: Rect) -> usize {
     area.height.saturating_sub(2) as usize
 }
 
-/// The last `height` lines, offset upward by `scroll` lines — i.e. what a
-/// bottom-anchored, scroll-up-for-history pane shows. `scroll` is clamped so
-/// scrolling past the start shows the first page rather than going blank
-/// (state::AppState doesn't know the line count when it tracks
-/// `message_scroll`, so it can't clamp on that side).
-fn windowed<'a>(lines: Vec<Line<'a>>, height: usize, scroll: usize) -> Vec<Line<'a>> {
+/// A bordered pane's inner content width — needed to know how many rendered
+/// rows a wrapped `Line` will actually take (see `windowed`).
+fn visible_cols(area: Rect) -> usize {
+    area.width.saturating_sub(2) as usize
+}
+
+/// The suffix of `lines` that fits within `height` *rendered* rows at `width`
+/// columns, offset upward by `scroll` lines — i.e. what a bottom-anchored,
+/// scroll-up-for-history pane shows.
+///
+/// Counts each line's actual *wrapped* row count (`Line::width()` divided by
+/// `width`, rounding up), not 1 row per logical line. Getting this wrong is
+/// exactly what caused a real bug: a long attachment URL wraps to 2 rendered
+/// rows, but counting it as 1 reserved one row too few — silently pushing
+/// genuinely newer messages below the pane's bottom edge, where `Paragraph`
+/// just clips whatever doesn't fit its rect with no error and no visible
+/// sign anything was cut. That looked exactly like "the TUI has stale data"
+/// even though the fetch itself was always current.
+///
+/// `scroll`'s own clamp still treats `height` as a line-count proxy (not
+/// wrap-aware) — a much more benign approximation, since it only affects how
+/// far you can page up, not whether the default (unscrolled) view clips
+/// real content.
+fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize) -> Vec<Line<'a>> {
     let scroll = scroll.min(lines.len().saturating_sub(height));
     let end = lines.len() - scroll;
-    let start = end.saturating_sub(height);
+
+    let width = width.max(1);
+    let mut start = end;
+    let mut rows_used = 0usize;
+    while start > 0 {
+        let rows = lines[start - 1].width().div_ceil(width).max(1);
+        if rows_used + rows > height {
+            break;
+        }
+        rows_used += rows;
+        start -= 1;
+    }
+
     lines[start..end].to_vec()
 }
 
@@ -368,10 +400,15 @@ mod tests {
             .collect()
     }
 
+    /// Wide enough that none of these short single-character lines wrap —
+    /// isolates the tests below from `windowed`'s wrap-awareness, which gets
+    /// its own dedicated tests further down.
+    const WIDE: usize = 80;
+
     #[test]
     fn shows_the_tail_when_content_overflows_the_pane() {
         assert_eq!(
-            labels(&windowed(lines(&["1", "2", "3", "4", "5"]), 3, 0)),
+            labels(&windowed(lines(&["1", "2", "3", "4", "5"]), WIDE, 3, 0)),
             ["3", "4", "5"]
         );
     }
@@ -379,7 +416,7 @@ mod tests {
     #[test]
     fn scrolling_up_shows_older_lines() {
         assert_eq!(
-            labels(&windowed(lines(&["1", "2", "3", "4", "5"]), 3, 2)),
+            labels(&windowed(lines(&["1", "2", "3", "4", "5"]), WIDE, 3, 2)),
             ["1", "2", "3"]
         );
     }
@@ -387,14 +424,47 @@ mod tests {
     #[test]
     fn scrolling_past_the_start_clamps_rather_than_panics() {
         assert_eq!(
-            labels(&windowed(lines(&["1", "2", "3"]), 3, 100)),
+            labels(&windowed(lines(&["1", "2", "3"]), WIDE, 3, 100)),
             ["1", "2", "3"]
         );
     }
 
     #[test]
     fn short_content_is_shown_in_full() {
-        assert_eq!(labels(&windowed(lines(&["1", "2"]), 10, 0)), ["1", "2"]);
+        assert_eq!(
+            labels(&windowed(lines(&["1", "2"]), WIDE, 10, 0)),
+            ["1", "2"]
+        );
+    }
+
+    #[test]
+    fn a_wide_line_reserves_its_actual_wrapped_row_count() {
+        // Regression test for a real bug: a long attachment URL (or any
+        // line wider than the pane) wraps to multiple rendered rows, but
+        // the old windowed() counted it as a single row — reserving one
+        // row too few and silently pushing the genuinely newest message
+        // below the pane's bottom edge, where Paragraph just clips
+        // whatever doesn't fit its rect. There's no error and no visible
+        // sign anything was cut — it just looks like stale data.
+        //
+        // At width 10, "this-line-is-wider-than-ten" (27 chars) needs 3
+        // wrapped rows. With height 3, the old (buggy) formula would have
+        // requested all 3 lines (one line == one row, 3 lines <= height 3)
+        // — a real Paragraph would then have no rows left for "newest" at
+        // all once "one" (row 0) and the wide line's wrap (rows 1-2, of
+        // the 3 it actually needs) ate the pane's only 3 rows.
+        let lines = vec![
+            Line::from("one"),
+            Line::from("this-line-is-wider-than-ten"),
+            Line::from("newest"),
+        ];
+        let result = windowed(lines, 10, 3, 0);
+        assert_eq!(
+            labels(&result),
+            ["newest"],
+            "the wide line alone needs all 3 rows once truly reserved, so \
+             only the newest line — never dropped — fits alongside it"
+        );
     }
 
     // Full-render checks against a synthetic (never real-account) fixture —

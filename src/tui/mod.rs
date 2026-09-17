@@ -110,6 +110,7 @@ async fn run_app(
                     }
                 }
                 Command::LoadMessages { channel_id, seq } => {
+                    tracing::info!(channel_id = %channel_id, seq, "requesting latest messages");
                     state.on_messages_loading();
                     spawn_load_messages(client.clone(), tx.clone(), channel_id, seq);
                 }
@@ -199,6 +200,7 @@ fn spawn_load_messages(
             .await
             .map(|response| (response.messages, response.has_more));
         log_if_err("load messages", &result);
+        log_load_result("load messages", &channel_id, &result);
         let _ = tx.send(Event::MessagesLoaded {
             channel_id,
             seq,
@@ -220,6 +222,7 @@ fn spawn_load_older_messages(
             .await
             .map(|response| (response.messages, response.has_more));
         log_if_err("load older messages", &result);
+        log_load_result("load older messages", &channel_id, &result);
         let _ = tx.send(Event::OlderMessagesLoaded { channel_id, result });
     });
 }
@@ -251,6 +254,7 @@ fn spawn_realtime(
             }
         };
         while let Some(event) = stream.next().await {
+            tracing::info!(?event, "realtime event received");
             if tx.send(Event::Realtime(event)).is_err() {
                 return; // the main loop is gone; nothing left to deliver to.
             }
@@ -273,5 +277,27 @@ fn spawn_logout(client: ApiClient, store: Arc<dyn CredentialStore>) {
 fn log_if_err<T>(what: &'static str, result: &Result<T, crate::api::ApiError>) {
     if let Err(error) = result {
         tracing::warn!(what, %error, "command failed");
+    }
+}
+
+/// Logs a successful message load's shape (count, newest timestamp) at INFO
+/// — added specifically to diagnose "the TUI shows older messages than the
+/// server has": without this, a successful-but-somehow-wrong load left no
+/// trace to compare against a direct API query.
+fn log_load_result(
+    what: &'static str,
+    channel_id: &str,
+    result: &Result<(Vec<crate::api::types::Message>, bool), crate::api::ApiError>,
+) {
+    if let Ok((messages, has_more)) = result {
+        let newest = messages.last().map(|m| m.created_at.to_rfc3339());
+        tracing::info!(
+            what,
+            channel_id,
+            count = messages.len(),
+            has_more,
+            newest = newest.as_deref(),
+            "load succeeded"
+        );
     }
 }
