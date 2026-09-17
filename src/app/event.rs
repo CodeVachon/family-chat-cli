@@ -4,7 +4,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::api::ApiError;
-use crate::api::types::{Channel, Message, RealtimeEvent, User};
+use crate::api::types::{Channel, ChannelMember, Message, RealtimeEvent, User};
 
 /// Results of async work started by a `Command`, delivered back to the main
 /// loop over an mpsc channel. Terminal key events don't go through here —
@@ -29,6 +29,14 @@ pub enum Event {
     MessageSent {
         channel_id: String,
         result: Result<(), ApiError>,
+    },
+    /// The response to a members fetch that rides along with every
+    /// `Command::LoadMessages` (#50) — no dedicated `Command` variant exists
+    /// for it since `tui::run` spawns the fetch itself whenever it handles
+    /// `LoadMessages`, the same way it fires `mark_channel_read`.
+    MembersLoaded {
+        channel_id: String,
+        result: Result<Vec<ChannelMember>, ApiError>,
     },
     Realtime(RealtimeEvent),
 }

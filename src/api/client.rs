@@ -107,9 +107,7 @@ impl ApiClient {
 
     /// `GET /channels/:id/members` — the nearest thing to "list users" the
     /// server exposes (see `ChannelMember`'s doc comment for why this is
-    /// per-channel rather than instance-wide). Not yet consumed by the TUI
-    /// (see #50), hence the `#[allow(dead_code)]`.
-    #[allow(dead_code)]
+    /// per-channel rather than instance-wide).
     pub async fn channel_members(
         &self,
         channel_id: &str,

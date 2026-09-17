@@ -172,6 +172,19 @@ pub enum RealtimeEvent {
     /// targeted update would also be possible.
     #[serde(rename = "read.updated")]
     ReadUpdated,
+    /// Sent once right after connecting (confirmed live: arrives before
+    /// `ready`) with every currently-online user id (#50). The incremental
+    /// per-user `presence` event (someone going online/offline mid-session)
+    /// is deliberately left unmodeled — its exact delta shape isn't
+    /// confirmed against a live event, and guessing wrong risks silently
+    /// misreporting someone's status rather than just not updating it; it
+    /// falls into `Other` and presence only refreshes on the next
+    /// reconnect's snapshot.
+    #[serde(rename = "presence.snapshot")]
+    PresenceSnapshot {
+        #[serde(rename = "onlineUserIds")]
+        online_user_ids: Vec<String>,
+    },
     #[serde(rename = "message.created")]
     MessageCreated {
         #[serde(rename = "channelId")]
@@ -228,5 +241,25 @@ mod tests {
         let event: RealtimeEvent =
             serde_json::from_str(r#"{"type": "read.updated"}"#).expect("should deserialize");
         assert!(matches!(event, RealtimeEvent::ReadUpdated));
+    }
+
+    /// Exact payload captured live from a real connection (#50) — a
+    /// `presence.snapshot` right before `ready`, with two online user ids.
+    #[test]
+    fn a_presence_snapshot_event_deserializes_the_real_payload() {
+        let event: RealtimeEvent = serde_json::from_str(
+            r#"{"type":"presence.snapshot","onlineUserIds":["KTTEXrODjbAS1QksXJlKJZXuyoPEKI5T","3ca58929-44b4-4b1f-9e91-4e9ec54b0324"],"ts":1789664376741}"#,
+        )
+        .expect("should deserialize");
+        let RealtimeEvent::PresenceSnapshot { online_user_ids } = event else {
+            panic!("expected PresenceSnapshot, got {event:?}");
+        };
+        assert_eq!(
+            online_user_ids,
+            vec![
+                "KTTEXrODjbAS1QksXJlKJZXuyoPEKI5T".to_string(),
+                "3ca58929-44b4-4b1f-9e91-4e9ec54b0324".to_string(),
+            ]
+        );
     }
 }

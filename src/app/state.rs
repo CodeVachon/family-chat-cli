@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::api::ApiError;
-use crate::api::types::{Channel, Message, RealtimeEvent, User};
+use crate::api::types::{Channel, ChannelMember, Message, RealtimeEvent, User};
 
 use super::event::Command;
 
@@ -76,6 +76,15 @@ pub struct LoggedInState {
     /// Channels with an older-page fetch currently in flight — guards
     /// against firing a second one before the first resolves.
     loading_older: HashSet<String>,
+    /// Per channel: the member list from `GET /channels/:id/members` (#50) —
+    /// fetched alongside every `LoadMessages` (see `tui::run`), so it's kept
+    /// current the same way messages are.
+    pub members: HashMap<String, Vec<ChannelMember>>,
+    pub members_error: Option<String>,
+    /// User ids the server reported online in the most recent
+    /// `presence.snapshot` (#50) — see `RealtimeEvent::PresenceSnapshot`'s
+    /// doc comment for why this can go stale between reconnects.
+    pub online_user_ids: HashSet<String>,
 }
 
 impl LoggedInState {
@@ -97,6 +106,9 @@ impl LoggedInState {
             next_seq: 0,
             has_more: HashMap::new(),
             loading_older: HashSet::new(),
+            members: HashMap::new(),
+            members_error: None,
+            online_user_ids: HashSet::new(),
         }
     }
 
@@ -545,6 +557,27 @@ impl AppState {
         }
     }
 
+    /// The response to a members fetch that rode along with a
+    /// `LoadMessages` (#50, see `Event::MembersLoaded`'s doc comment).
+    pub fn on_members_loaded(
+        &mut self,
+        channel_id: String,
+        result: Result<Vec<ChannelMember>, ApiError>,
+    ) {
+        let Screen::LoggedIn(state) = &mut self.screen else {
+            return;
+        };
+        match result {
+            Ok(members) => {
+                state.members_error = None;
+                state.members.insert(channel_id, members);
+            }
+            Err(error) => {
+                state.members_error = Some(format!("Couldn't load users: {error}"));
+            }
+        }
+    }
+
     pub fn on_logout(&mut self) {
         self.screen = Screen::LoggedOut(LoginForm::new());
     }
@@ -576,6 +609,10 @@ impl AppState {
             // A full reload naturally re-requests the selected channel's
             // messages too, via on_channels_loaded.
             RealtimeEvent::Resync | RealtimeEvent::ChannelsChanged => Some(Command::LoadChannels),
+            RealtimeEvent::PresenceSnapshot { online_user_ids } => {
+                state.online_user_ids = online_user_ids.into_iter().collect();
+                None
+            }
             RealtimeEvent::MessageCreated { channel_id }
             | RealtimeEvent::MessageUpdated { channel_id }
             | RealtimeEvent::MessageDeleted { channel_id } => {
@@ -893,6 +930,49 @@ mod tests {
             channels[1].unread_count, 0,
             "Random was just selected, its count should be cleared"
         );
+    }
+
+    #[test]
+    fn on_members_loaded_caches_members_and_clears_a_prior_error() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_members_loaded("c1".to_string(), Err(ApiError::Server("boom".to_string())));
+        {
+            let Screen::LoggedIn(logged_in) = &state.screen else {
+                panic!("expected LoggedIn");
+            };
+            assert!(logged_in.members_error.is_some());
+        }
+
+        let members = vec![ChannelMember {
+            user_id: "u1".to_string(),
+            role: "owner".to_string(),
+            name: "Louise".to_string(),
+            color_hue: Some(220),
+            avatar_url: None,
+        }];
+        state.on_members_loaded("c1".to_string(), Ok(members));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(logged_in.members_error.is_none());
+        assert_eq!(logged_in.members.get("c1").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn a_presence_snapshot_updates_online_user_ids_and_needs_no_command() {
+        let mut state = logged_in_with_channels(["General"]);
+        let command = state.on_realtime_event(RealtimeEvent::PresenceSnapshot {
+            online_user_ids: vec!["u1".to_string(), "u2".to_string()],
+        });
+        assert!(command.is_none());
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(logged_in.online_user_ids.contains("u1"));
+        assert!(logged_in.online_user_ids.contains("u2"));
+        assert!(!logged_in.online_user_ids.contains("u3"));
     }
 
     #[test]

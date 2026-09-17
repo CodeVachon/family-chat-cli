@@ -87,6 +87,10 @@ async fn run_app(
                     None
                 }
                 Some(Event::MessageSent { channel_id, result }) => state.on_message_sent(channel_id, result),
+                Some(Event::MembersLoaded { channel_id, result }) => {
+                    state.on_members_loaded(channel_id, result);
+                    None
+                }
                 Some(Event::Realtime(event)) => state.on_realtime_event(event),
                 None => None,
             },
@@ -121,6 +125,12 @@ async fn run_app(
                     // briefly stale, logged for diagnosis like every other
                     // command (see `log_if_err`).
                     spawn_mark_channel_read(client.clone(), channel_id.clone());
+                    // Same reasoning as mark_channel_read: every LoadMessages
+                    // means "the user is looking at this channel," which is
+                    // also a fine moment to keep its member list current
+                    // (#50). Refetched every time rather than cached-once, so
+                    // the manual refresh key ('r') also refreshes users.
+                    spawn_load_members(client.clone(), tx.clone(), channel_id.clone());
                     spawn_load_messages(client.clone(), tx.clone(), channel_id, seq);
                 }
                 Command::LoadOlderMessages {
@@ -259,6 +269,17 @@ fn spawn_mark_channel_read(client: ApiClient, channel_id: String) {
     tokio::spawn(async move {
         let result = client.mark_channel_read(&channel_id).await;
         log_if_err("mark channel read", &result);
+    });
+}
+
+fn spawn_load_members(client: ApiClient, tx: mpsc::UnboundedSender<Event>, channel_id: String) {
+    tokio::spawn(async move {
+        let result = client
+            .channel_members(&channel_id)
+            .await
+            .map(|response| response.members);
+        log_if_err("load users", &result);
+        let _ = tx.send(Event::MembersLoaded { channel_id, result });
     });
 }
 

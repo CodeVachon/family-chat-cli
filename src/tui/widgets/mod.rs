@@ -14,15 +14,18 @@ use crate::text::html;
 
 use super::layout::split;
 
-/// Below this, the fixed-width sidebar (28 cols, see `layout::split`) alone
-/// leaves little to nothing for the main pane, and message text wraps into
-/// an unreadable single-word-per-line column — confirmed by rendering the
-/// real layout at a range of sizes (see the `dump_small_sizes` test) rather
-/// than picking a number blind. Nothing panics below this floor either way
-/// (ratatui's constraint solver degrades gracefully, see
+/// Below this, the two fixed-width side columns (28-col channels sidebar +
+/// 24-col users pane, see `layout::split`) alone leave little to nothing
+/// for the main pane, and message text wraps into an unreadable
+/// single-word-per-line column — confirmed by rendering the real layout at
+/// a range of sizes (see the `dump_small_sizes` test) rather than picking a
+/// number blind. Re-derived (50 → 80) when the users pane (#50) added a
+/// second fixed-width column, since the old floor left the main pane at
+/// zero width. Nothing panics below this floor either way (ratatui's
+/// constraint solver degrades gracefully, see
 /// `tiny_terminal_sizes_never_panic`) — this is purely so a too-small
 /// terminal gets one clear message instead of an unusably squeezed layout.
-const MIN_WIDTH: u16 = 50;
+const MIN_WIDTH: u16 = 80;
 const MIN_HEIGHT: u16 = 12;
 
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -298,11 +301,60 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         frame.set_cursor_position((cursor_x, compose_area.y + 1));
     }
 
+    render_users(frame, layout.users, state);
+
     let hint = format!(
         "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · Enter send · r refresh · l logout · q quit",
         state.user.name
     );
     frame.render_widget(Paragraph::new(hint), layout.status);
+}
+
+/// The current channel's member list (#50) — read-only, no selection/focus
+/// of its own (nothing in the app yet acts on a specific selected member;
+/// see the ticket's note for why this stayed a display-only pane). An
+/// online marker is shown only for ids the last `presence.snapshot`
+/// actually reported; presence for anyone else is unknown, not "offline" —
+/// see `RealtimeEvent::PresenceSnapshot`'s doc comment for why there's no
+/// finer-grained update than that snapshot.
+fn render_users(frame: &mut Frame, area: Rect, state: &LoggedInState) {
+    let no_channels = state.channels.as_ref().is_none_or(Vec::is_empty);
+    let members = state
+        .selected_channel()
+        .and_then(|c| state.members.get(&c.id));
+    let body: Vec<Line> = if no_channels {
+        vec![Line::from("No channels yet.")]
+    } else {
+        match (&state.members_error, members) {
+            (Some(error), None) => vec![Line::styled(
+                error.as_str().to_string(),
+                Style::default().fg(Color::Red),
+            )],
+            (_, Some(members)) if members.is_empty() => vec![Line::from("No users.")],
+            (_, Some(members)) => members
+                .iter()
+                .map(|member| {
+                    let online = state.online_user_ids.contains(&member.user_id);
+                    let marker = Span::styled(
+                        if online { "● " } else { "○ " },
+                        Style::default().fg(if online {
+                            Color::Green
+                        } else {
+                            Color::DarkGray
+                        }),
+                    );
+                    Line::from(vec![marker, Span::raw(member.name.clone())])
+                })
+                .collect(),
+            (None, None) => vec![Line::from("Loading users…")],
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(Text::from(body))
+            .block(Block::default().borders(Borders::ALL).title("Users"))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// A bordered pane's inner content height.
@@ -652,7 +704,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use crate::api::types::{Channel, Message, MessageAuthor, User};
+    use crate::api::types::{Channel, ChannelMember, Message, MessageAuthor, User};
     use crate::app::{AppState, Command};
 
     fn logged_in_state_with_messages(count: usize) -> AppState {
@@ -722,7 +774,7 @@ mod tests {
     #[test]
     fn overflowing_history_shows_the_latest_messages_by_default() {
         let state = logged_in_state_with_messages(20);
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("msg-19"),
             "should show the latest message:\n{content}"
@@ -740,7 +792,7 @@ mod tests {
         for _ in 0..5 {
             state.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         }
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("msg-0"),
             "scrolling up should reveal the oldest message:\n{content}"
@@ -762,7 +814,7 @@ mod tests {
         // the error wraps onto its own line inside the narrow sidebar, so
         // the rendered text has a newline where the source string had a
         // space.
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("Couldn't load channels"),
             "the channels error should render inside the channels pane:\n{content}"
@@ -776,7 +828,7 @@ mod tests {
         logged_in_state_mut(&mut state).channels_error =
             Some("Couldn't load channels: offline".to_string());
 
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("General"),
             "a background refresh failure must not blank an already-loaded channel list:\n{content}"
@@ -796,7 +848,7 @@ mod tests {
             Some("Couldn't load messages: offline".to_string());
 
         // Same wrap-safe check as the channels-pane test above.
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("Couldn't load messages"),
             "the messages error should render inside the messages pane:\n{content}"
@@ -810,7 +862,7 @@ mod tests {
         logged_in_state_mut(&mut state).messages_error =
             Some("Couldn't load older messages: offline".to_string());
 
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("msg-2"),
             "a failed background/older-page load must not blank already-loaded messages:\n{content}"
@@ -831,7 +883,7 @@ mod tests {
             logged_in.send_error = Some("Couldn't send message: offline".to_string());
         }
 
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("hello"),
             "a failed send must never lose the draft:\n{content}"
@@ -852,11 +904,58 @@ mod tests {
             logged_in.send_error = Some("send boom".to_string());
         }
 
-        let content = render_to_text(&state, 60, 15);
+        let content = render_to_text(&state, 110, 15);
         assert!(
             content.contains("Tab switch focus"),
             "the shared bottom line should still show the key hints:\n{content}"
         );
+    }
+
+    #[test]
+    fn the_users_pane_shows_members_with_an_online_marker_from_presence() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.members.insert(
+                "c1".to_string(),
+                vec![
+                    ChannelMember {
+                        user_id: "u1".to_string(),
+                        role: "owner".to_string(),
+                        name: "Louise".to_string(),
+                        color_hue: Some(220),
+                        avatar_url: None,
+                    },
+                    ChannelMember {
+                        user_id: "u2".to_string(),
+                        role: "user".to_string(),
+                        name: "Rachel".to_string(),
+                        color_hue: Some(163),
+                        avatar_url: None,
+                    },
+                ],
+            );
+            logged_in.online_user_ids.insert("u1".to_string());
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("Louise"));
+        assert!(content.contains("Rachel"));
+        assert!(
+            content.contains("● Louise"),
+            "the online member should get the filled marker:\n{content}"
+        );
+        assert!(
+            content.contains("○ Rachel"),
+            "a member with unknown/offline presence should get the hollow marker:\n{content}"
+        );
+    }
+
+    #[test]
+    fn the_users_pane_shows_loading_until_members_arrive() {
+        let state = logged_in_state_with_messages(1);
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("Loading users"));
     }
 
     #[test]
@@ -913,7 +1012,7 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_small_sizes() {
-        for (w, h) in [(80u16, 24u16), (50, 12), (40, 10), (30, 8), (20, 6)] {
+        for (w, h) in [(100u16, 24u16), (80, 18), (80, 12), (70, 16), (50, 12)] {
             let state = logged_in_state_with_messages(5);
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             let frame = terminal.draw(|frame| render(frame, &state)).unwrap();
