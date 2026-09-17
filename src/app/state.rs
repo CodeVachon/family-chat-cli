@@ -558,15 +558,24 @@ impl AppState {
             return None;
         };
         match event {
-            RealtimeEvent::Ready | RealtimeEvent::Other => None,
+            // ReadUpdated is deliberately *not* folded in here, unlike
+            // Resync/ChannelsChanged — this app's own mark_channel_read call
+            // (#33) triggers the server's own read.updated echo right back
+            // at this same client. Reacting to it by reloading channels
+            // would call request_messages for the selected channel again,
+            // which fires another mark_channel_read, which triggers another
+            // read.updated — a self-sustaining infinite loop, confirmed live
+            // (hundreds of requests/sec against the real server) the first
+            // time this was wired up. The channel's own unread_count is
+            // already zeroed locally and on the server the moment it's
+            // selected, so there's nothing this client still needs from
+            // reacting to its own echo; only another client's read
+            // (unreachable without more payload detail than the event
+            // carries) would be worth picking up here, and isn't yet.
+            RealtimeEvent::Ready | RealtimeEvent::Other | RealtimeEvent::ReadUpdated => None,
             // A full reload naturally re-requests the selected channel's
-            // messages too, via on_channels_loaded. ReadUpdated (#33) rides
-            // along here too — refetching channels is always correct for
-            // picking up a changed unread count, even without knowing the
-            // event's exact payload shape.
-            RealtimeEvent::Resync | RealtimeEvent::ChannelsChanged | RealtimeEvent::ReadUpdated => {
-                Some(Command::LoadChannels)
-            }
+            // messages too, via on_channels_loaded.
+            RealtimeEvent::Resync | RealtimeEvent::ChannelsChanged => Some(Command::LoadChannels),
             RealtimeEvent::MessageCreated { channel_id }
             | RealtimeEvent::MessageUpdated { channel_id }
             | RealtimeEvent::MessageDeleted { channel_id } => {
@@ -807,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn resync_channels_changed_and_read_updated_reload_channels() {
+    fn resync_and_channels_changed_reload_channels() {
         let mut state = logged_in_with_channels(["General"]);
         assert!(matches!(
             state.on_realtime_event(RealtimeEvent::Resync),
@@ -817,12 +826,24 @@ mod tests {
             state.on_realtime_event(RealtimeEvent::ChannelsChanged),
             Some(Command::LoadChannels)
         ));
-        assert!(matches!(
-            state.on_realtime_event(RealtimeEvent::ReadUpdated),
-            Some(Command::LoadChannels)
-        ));
         assert!(state.on_realtime_event(RealtimeEvent::Ready).is_none());
         assert!(state.on_realtime_event(RealtimeEvent::Other).is_none());
+    }
+
+    #[test]
+    fn read_updated_is_ignored_to_avoid_an_infinite_mark_read_loop() {
+        // This app's own mark_channel_read call (#33) makes the server echo
+        // read.updated right back at this same client. Reacting to it by
+        // reloading channels used to call request_messages for the
+        // selected channel again, which fires another mark_channel_read,
+        // which triggers another read.updated — an infinite loop, confirmed
+        // live (hundreds of requests/sec against the real server).
+        let mut state = logged_in_with_channels(["General"]);
+        assert!(
+            state
+                .on_realtime_event(RealtimeEvent::ReadUpdated)
+                .is_none()
+        );
     }
 
     #[test]
