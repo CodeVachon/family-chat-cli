@@ -6,7 +6,7 @@ parent: 6
 labels: [task, chat, mvp]
 blockedBy: [21, 27, 29]
 created: 2026-08-25T21:45:44Z
-updated: 2026-09-17T17:20:23Z
+updated: 2026-09-17T17:30:44Z
 ---
 
 ## Description
@@ -38,3 +38,11 @@ Verified live against the real account: "Christopher & Louise" (2 members) shows
 ### 2026-09-17T17:20:23Z — Christopher Vachon (user)
 
 Follow-up layout tweak: moved the users pane from its own fixed-width third column into the sidebar, stacked below the channel list, after Chris pointed out the channel list (usually short) left a lot of dead space in its own column while users had a separate narrow column squeezing the main messages pane. The sidebar now splits vertically — channels sized to content (channel count + border), users given whatever's left. Re-derived the min-size floor back down to 50x12 (from 80x12) now that the users pane costs sidebar height instead of a whole extra main-pane-width column. Also fixed a sizing bug this exposed: content-sizing the channels pane to a zero channel count also applied when showing a channels-load error with nothing cached, squeezing that error message down to unreadable. Verified live: all 7 real channels show with users immediately below, no gap; messages pane back to full width. 98 tests passing, clippy/fmt clean.
+
+### 2026-09-17T17:30:44Z — Christopher Vachon (user)
+
+Follow-up: surfaced more channel metadata the server already sends but this app never displayed. Added color/myRole/mentionCount to Channel (default-parsed so old payloads/mocks without them still work). Channel list now shows a ★ favorite prefix, 🔒 for private channels, an @N mention-count suffix, and each channel's own hex color tinting its name. Added a new "Info" pane (between the channel list and users pane) showing the selected channel's description, Public/Private + Favorite + Archived flags, and the current user's role.
+
+Caught a real regression while building this: sizing the Info pane by logical line count reintroduced the exact clipping bug fixed earlier for the message pane — the flags line wraps onto two rows at the sidebar's actual width, silently clipping the role line off the bottom. Fixed with a wrapped_row_count helper (same fix pattern as windowed()) plus a regression test that actually caught it failing before the fix.
+
+Verified live: favorite/private markers and per-channel info render correctly against the real account; "The Vachons" and "Testing" show their real descriptions without truncation. 102 tests passing, clippy/fmt clean.
