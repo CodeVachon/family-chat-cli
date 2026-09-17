@@ -12,18 +12,34 @@ use tracing_subscriber::EnvFilter;
 use api::ApiClient;
 use auth::KeyringStore;
 
+/// The server to connect to when neither `--server`, `FAMILY_CHAT_URL`, nor
+/// the config file's `server` is set.
+const DEFAULT_SERVER: &str = "https://chat.thevachonfamily.ca";
+
 fn main() -> anyhow::Result<()> {
     let _log_guard = init_logging()?;
     install_panic_hook();
 
     let args = cli::Cli::parse();
+    let config = config::load()?;
+    let server = resolve_server(args.server, config.server);
     let store = KeyringStore::new("default")?;
-    let client = ApiClient::new(args.server);
+    let client = ApiClient::new(server);
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(tui::run(client, Box::new(store)))
+}
+
+/// `--server`/`FAMILY_CHAT_URL` (clap already merges those two into one
+/// `Option`) wins over the config file's `server`, which wins over the
+/// built-in default — the precedence promised in config::Config's doc
+/// comment.
+fn resolve_server(cli_server: Option<String>, config_server: Option<String>) -> String {
+    cli_server
+        .or(config_server)
+        .unwrap_or_else(|| DEFAULT_SERVER.to_string())
 }
 
 /// Logs go to a file: once the TUI enables raw mode and the alternate screen,
@@ -46,7 +62,9 @@ fn init_logging() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard>
     Ok(guard)
 }
 
-/// Placeholder location until #34/#35 define the real config/state directory layout.
+/// The state directory (logs) is XDG-fallback like `config::path`, but a
+/// separate location by convention — `XDG_STATE_HOME`, not
+/// `XDG_CONFIG_HOME`, since logs aren't user-editable settings.
 fn log_dir() -> anyhow::Result<std::path::PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(std::path::PathBuf::from)
@@ -67,4 +85,30 @@ fn install_panic_hook() {
         let _ = tui::restore_terminal();
         default_hook(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cli_flag_wins_over_the_config_file() {
+        let server = resolve_server(
+            Some("https://cli.example.com".to_string()),
+            Some("https://config.example.com".to_string()),
+        );
+        assert_eq!(server, "https://cli.example.com");
+    }
+
+    #[test]
+    fn the_config_file_wins_over_the_default_when_the_cli_flag_is_unset() {
+        let server = resolve_server(None, Some("https://config.example.com".to_string()));
+        assert_eq!(server, "https://config.example.com");
+    }
+
+    #[test]
+    fn the_built_in_default_is_used_when_neither_is_set() {
+        let server = resolve_server(None, None);
+        assert_eq!(server, DEFAULT_SERVER);
+    }
 }

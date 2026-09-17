@@ -23,9 +23,11 @@ tracing-appender = "0.2"
 tl = "0.7"
 futures-util = "0.3"
 toml = "0.8"
+url = "2"
 
 [dev-dependencies]
 wiremock = "0.6"
+tempfile = "3"
 
 [profile.release]
 lto = true
