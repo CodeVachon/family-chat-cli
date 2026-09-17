@@ -432,6 +432,62 @@ mod tests {
         let client = ApiClient::new(server.uri());
         let error = client.send_message("c1", "<p></p>").await.unwrap_err();
 
+        assert!(
+            matches!(error, ApiError::Validation(_)),
+            "expected Validation, got {error:?}"
+        );
         assert_eq!(error.to_string(), "Message cannot be empty");
+    }
+
+    /// Payload captured live against the real server (#23) by POSTing an
+    /// empty body directly: `{"error":{"message":"Validation failed",
+    /// "issues":[{"code":"custom","path":["body"],"message":"Message
+    /// cannot be empty"}]}}`.
+    #[tokio::test]
+    async fn send_message_combines_validation_issues_into_one_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "Validation failed",
+                    "issues": [
+                        {
+                            "code": "custom",
+                            "path": ["body"],
+                            "message": "Message cannot be empty"
+                        }
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let error = client.send_message("c1", "<p></p>").await.unwrap_err();
+
+        assert!(matches!(error, ApiError::Validation(_)));
+        assert_eq!(error.to_string(), "body: Message cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn a_429_response_surfaces_as_rate_limited() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .respond_with(ResponseTemplate::new(429).set_body_json(serde_json::json!({
+                "error": { "message": "Slow down — try again in 12s" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let error = client.send_message("c1", "<p>hi</p>").await.unwrap_err();
+
+        assert!(
+            matches!(error, ApiError::RateLimited(_)),
+            "expected RateLimited, got {error:?}"
+        );
+        assert_eq!(error.to_string(), "Slow down — try again in 12s");
     }
 }
