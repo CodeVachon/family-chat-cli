@@ -1,6 +1,6 @@
 //! Channel list, message pane, composer, and auth-status widgets (#24/#26).
 
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -194,7 +194,7 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         {
             Some(messages) if messages.is_empty() => vec![Line::from("No messages yet.")],
             Some(messages) => {
-                let all_lines: Vec<Line> = messages.iter().flat_map(message_lines).collect();
+                let all_lines = messages_to_lines(messages);
                 // Window to the pane's visible height, anchored to the
                 // bottom (latest) minus however far `message_scroll` has
                 // paged up — otherwise a channel with more history than
@@ -294,6 +294,34 @@ fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize
     }
 
     lines[start..end].to_vec()
+}
+
+/// All of a channel's messages, with a `YYYY-MM-DD` divider inserted (in the
+/// local timezone) wherever the calendar date changes — messages here can
+/// span weeks, and a bare `HH:MM` gives no way to tell which day is which.
+fn messages_to_lines(messages: &[Message]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut last_date: Option<NaiveDate> = None;
+
+    for message in messages {
+        let date = message.created_at.with_timezone(&Local).date_naive();
+        if last_date != Some(date) {
+            lines.push(date_divider(date));
+            last_date = Some(date);
+        }
+        lines.extend(message_lines(message));
+    }
+
+    lines
+}
+
+fn date_divider(date: NaiveDate) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("── {} ──", date.format("%Y-%m-%d")),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// One message: an author/timestamp-prefixed rendering of its (rich-text)
@@ -564,6 +592,39 @@ mod tests {
         assert!(
             content.contains("msg-0"),
             "scrolling up should reveal the oldest message:\n{content}"
+        );
+    }
+
+    #[test]
+    fn a_date_divider_appears_once_per_calendar_day_not_per_message() {
+        use chrono::TimeZone;
+
+        let make = |id: &str, created_at: chrono::DateTime<Utc>| Message {
+            id: id.to_string(),
+            kind: "user".to_string(),
+            body: format!("<p>{id}</p>"),
+            created_at,
+            deleted_at: None,
+            author: MessageAuthor {
+                id: "u1".to_string(),
+                name: "Chris".to_string(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+        };
+        let day1 = Utc.with_ymd_and_hms(2026, 9, 14, 10, 0, 0).unwrap();
+        let day2 = Utc.with_ymd_and_hms(2026, 9, 16, 10, 0, 0).unwrap();
+        let messages = vec![make("a", day1), make("b", day1), make("c", day2)];
+
+        let lines = messages_to_lines(&messages);
+        let divider_count = lines
+            .iter()
+            .filter(|line| line.spans.iter().any(|s| s.content.contains("──")))
+            .count();
+
+        assert_eq!(
+            divider_count, 2,
+            "two distinct days should get exactly two dividers, not one per message"
         );
     }
 
