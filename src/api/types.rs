@@ -85,6 +85,20 @@ pub struct Attachment {
     pub original_filename: Option<String>,
 }
 
+/// Present (with `kind == "system"`) on channel events — joins, leaves,
+/// additions/removals by another member, renames, and so on. `body` is
+/// empty for these; the renderer builds its text from this instead (#60).
+/// `subject_user_id` is only present on membership events (`join`/`leave`)
+/// — a `channel_updated` event, for example, has no subject, only an actor.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SystemEvent {
+    pub event: String,
+    #[serde(rename = "actorUserId")]
+    pub actor_user_id: String,
+    #[serde(rename = "subjectUserId", default)]
+    pub subject_user_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     pub id: String,
@@ -95,6 +109,8 @@ pub struct Message {
     pub created_at: DateTime<Utc>,
     #[serde(rename = "deletedAt")]
     pub deleted_at: Option<DateTime<Utc>>,
+    #[serde(rename = "systemEvent", default)]
+    pub system_event: Option<SystemEvent>,
     pub author: MessageAuthor,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
@@ -143,4 +159,37 @@ pub enum RealtimeEvent {
     },
     #[serde(other)]
     Other,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A real `channel_updated` system event has no `subjectUserId` at all
+    /// (only `join`/`leave` do) — this used to be a required field, which
+    /// broke decoding every message in a channel the moment one rename
+    /// event showed up in its history (#60).
+    #[test]
+    fn a_system_event_without_a_subject_still_deserializes() {
+        let json = r#"{
+            "id": "m1",
+            "type": "system",
+            "body": "",
+            "createdAt": "2026-07-28T16:00:12.788Z",
+            "deletedAt": null,
+            "systemEvent": {
+                "event": "channel_updated",
+                "renamedTo": "New Name",
+                "actorUserId": "u1"
+            },
+            "author": {"id": "u1", "name": "Christopher"}
+        }"#;
+
+        let message: Message = serde_json::from_str(json).expect("should deserialize");
+        let event = message
+            .system_event
+            .expect("system_event should be present");
+        assert_eq!(event.event, "channel_updated");
+        assert_eq!(event.subject_user_id, None);
+    }
 }

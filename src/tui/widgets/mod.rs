@@ -343,7 +343,16 @@ fn message_lines(message: &Message) -> Vec<Line<'static>> {
         ),
     ];
 
-    let mut lines = html::to_lines(&message.body);
+    let mut lines = if message.kind == "system" {
+        vec![Line::from(Span::styled(
+            system_event_text(message),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ))]
+    } else {
+        html::to_lines(&message.body)
+    };
     match lines.first_mut() {
         Some(first) => {
             let mut spans = prefix;
@@ -355,6 +364,26 @@ fn message_lines(message: &Message) -> Vec<Line<'static>> {
 
     lines.extend(message.attachments.iter().map(attachment_line));
     lines
+}
+
+/// A channel-membership event's description, rendered after the usual
+/// `[HH:MM] Author:` prefix (where `Author` is the *subject* of the event —
+/// the server sets the message's `author` to whoever joined/left, not
+/// whoever performed the action). We only have the actor's raw id, not
+/// their display name, so actor-initiated events on someone else don't name
+/// the actor.
+fn system_event_text(message: &Message) -> String {
+    let Some(event) = &message.system_event else {
+        return "performed a channel action".to_string();
+    };
+    let is_self = event.subject_user_id.as_deref() == Some(event.actor_user_id.as_str());
+    match event.event.as_str() {
+        "join" if is_self => "joined the channel".to_string(),
+        "join" => "was added to the channel".to_string(),
+        "leave" if is_self => "left the channel".to_string(),
+        "leave" => "was removed from the channel".to_string(),
+        other => other.replace('_', " "),
+    }
 }
 
 fn attachment_line(attachment: &Attachment) -> Line<'static> {
@@ -417,6 +446,7 @@ fn focus_style(focused: bool) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::types::SystemEvent;
 
     fn lines(labels: &[&str]) -> Vec<Line<'static>> {
         labels
@@ -535,6 +565,7 @@ mod tests {
             .map(|i| Message {
                 id: format!("m{i}"),
                 kind: "user".to_string(),
+                system_event: None,
                 body: format!("<p>msg-{i}</p>"),
                 created_at: Utc::now(),
                 deleted_at: None,
@@ -602,6 +633,7 @@ mod tests {
         let make = |id: &str, created_at: chrono::DateTime<Utc>| Message {
             id: id.to_string(),
             kind: "user".to_string(),
+            system_event: None,
             body: format!("<p>{id}</p>"),
             created_at,
             deleted_at: None,
@@ -625,6 +657,38 @@ mod tests {
         assert_eq!(
             divider_count, 2,
             "two distinct days should get exactly two dividers, not one per message"
+        );
+    }
+
+    #[test]
+    fn a_self_join_system_event_describes_itself_after_the_author_prefix() {
+        let message = Message {
+            id: "sys1".to_string(),
+            kind: "system".to_string(),
+            system_event: Some(SystemEvent {
+                event: "join".to_string(),
+                actor_user_id: "u1".to_string(),
+                subject_user_id: Some("u1".to_string()),
+            }),
+            body: String::new(),
+            created_at: Utc::now(),
+            deleted_at: None,
+            author: MessageAuthor {
+                id: "u1".to_string(),
+                name: "Christopher".to_string(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+        };
+
+        let rendered: String = message_lines(&message)
+            .into_iter()
+            .flat_map(|line| line.spans.into_iter().map(|s| s.content.into_owned()))
+            .collect();
+
+        assert!(
+            rendered.ends_with("Christopher: joined the channel"),
+            "a self-join should render as \"joined the channel\" after the usual prefix, got: {rendered}"
         );
     }
 
@@ -666,6 +730,7 @@ mod tests {
         let msg = |id: &str, author: MessageAuthor, body: &str| Message {
             id: id.to_string(),
             kind: "user".to_string(),
+            system_event: None,
             body: body.to_string(),
             created_at: Utc::now(),
             deleted_at: None,

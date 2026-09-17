@@ -872,6 +872,7 @@ mod tests {
         let older = vec![Message {
             id: "m_old".to_string(),
             kind: "user".to_string(),
+            system_event: None,
             body: "<p>older</p>".to_string(),
             created_at: Utc::now(),
             deleted_at: None,
@@ -909,6 +910,7 @@ mod tests {
             .map(|i| Message {
                 id: format!("old{i}"),
                 kind: "user".to_string(),
+                system_event: None,
                 body: format!("<p>old-{i}</p>"),
                 created_at: Utc::now(),
                 deleted_at: None,
@@ -923,6 +925,7 @@ mod tests {
         older.push(Message {
             id: "m0".to_string(), // duplicates the existing cache's oldest message
             kind: "user".to_string(),
+            system_event: None,
             body: "<p>msg-0</p>".to_string(),
             created_at: Utc::now(),
             deleted_at: None,
@@ -998,6 +1001,7 @@ mod tests {
             .map(|i| Message {
                 id: format!("m{i}"),
                 kind: "user".to_string(),
+                system_event: None,
                 body: format!("<p>msg-{i}</p>"),
                 created_at: Utc::now(),
                 deleted_at: None,
