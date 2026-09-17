@@ -143,3 +143,8 @@
 {"at":"2026-09-17T17:46:37Z","id":23,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
 {"at":"2026-09-17T17:50:19Z","id":23,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-17T17:50:20Z","id":23,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
+{"at":"2026-09-17T17:51:27Z","id":32,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"In Progress"}
+{"at":"2026-09-17T17:51:27Z","id":32,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
+{"at":"2026-09-17T17:54:11Z","id":56,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
+{"at":"2026-09-17T17:54:11Z","id":59,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
+{"at":"2026-09-17T17:54:17Z","id":4,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
