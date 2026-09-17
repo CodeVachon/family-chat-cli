@@ -14,7 +14,23 @@ use crate::text::html;
 
 use super::layout::split;
 
+/// Below this, the fixed-width sidebar (28 cols, see `layout::split`) alone
+/// leaves little to nothing for the main pane, and message text wraps into
+/// an unreadable single-word-per-line column — confirmed by rendering the
+/// real layout at a range of sizes (see the `dump_small_sizes` test) rather
+/// than picking a number blind. Nothing panics below this floor either way
+/// (ratatui's constraint solver degrades gracefully, see
+/// `tiny_terminal_sizes_never_panic`) — this is purely so a too-small
+/// terminal gets one clear message instead of an unusably squeezed layout.
+const MIN_WIDTH: u16 = 50;
+const MIN_HEIGHT: u16 = 12;
+
 pub fn render(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        render_too_small(frame, area);
+        return;
+    }
     match &state.screen {
         Screen::Resuming => centered_message(frame, "Connecting…"),
         Screen::LoggedOut(form) => login_form(frame, form),
@@ -27,6 +43,23 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         ),
         Screen::LoggedIn(logged_in) => logged_in_view(frame, logged_in),
     }
+}
+
+/// No border, no centering rect — at the very smallest sizes (down to 1x1,
+/// see `tiny_terminal_sizes_never_panic`) even a bordered box wouldn't
+/// necessarily fit. `Wrap` lets this degrade to whatever's actually visible
+/// rather than clipping mid-word.
+fn render_too_small(frame: &mut Frame, area: Rect) {
+    let message = format!(
+        "Terminal too small ({}x{}) — resize to at least {MIN_WIDTH}x{MIN_HEIGHT}.",
+        area.width, area.height
+    );
+    frame.render_widget(
+        Paragraph::new(message)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn centered_message(frame: &mut Frame, message: &str) {
@@ -689,7 +722,7 @@ mod tests {
     #[test]
     fn overflowing_history_shows_the_latest_messages_by_default() {
         let state = logged_in_state_with_messages(20);
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("msg-19"),
             "should show the latest message:\n{content}"
@@ -707,7 +740,7 @@ mod tests {
         for _ in 0..5 {
             state.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         }
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("msg-0"),
             "scrolling up should reveal the oldest message:\n{content}"
@@ -729,7 +762,7 @@ mod tests {
         // the error wraps onto its own line inside the narrow sidebar, so
         // the rendered text has a newline where the source string had a
         // space.
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("Couldn't load channels"),
             "the channels error should render inside the channels pane:\n{content}"
@@ -743,7 +776,7 @@ mod tests {
         logged_in_state_mut(&mut state).channels_error =
             Some("Couldn't load channels: offline".to_string());
 
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("General"),
             "a background refresh failure must not blank an already-loaded channel list:\n{content}"
@@ -763,7 +796,7 @@ mod tests {
             Some("Couldn't load messages: offline".to_string());
 
         // Same wrap-safe check as the channels-pane test above.
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("Couldn't load messages"),
             "the messages error should render inside the messages pane:\n{content}"
@@ -777,7 +810,7 @@ mod tests {
         logged_in_state_mut(&mut state).messages_error =
             Some("Couldn't load older messages: offline".to_string());
 
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("msg-2"),
             "a failed background/older-page load must not blank already-loaded messages:\n{content}"
@@ -798,7 +831,7 @@ mod tests {
             logged_in.send_error = Some("Couldn't send message: offline".to_string());
         }
 
-        let content = render_to_text(&state, 60, 10);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("hello"),
             "a failed send must never lose the draft:\n{content}"
@@ -819,11 +852,80 @@ mod tests {
             logged_in.send_error = Some("send boom".to_string());
         }
 
-        let content = render_to_text(&state, 60, 12);
+        let content = render_to_text(&state, 60, 15);
         assert!(
             content.contains("Tab switch focus"),
             "the shared bottom line should still show the key hints:\n{content}"
         );
+    }
+
+    #[test]
+    fn below_the_minimum_size_shows_a_resize_message_instead_of_the_ui() {
+        let state = logged_in_state_with_messages(5);
+        let content = render_to_text(&state, MIN_WIDTH - 1, MIN_HEIGHT);
+        assert!(
+            content.contains("Terminal too small"),
+            "a too-narrow terminal should show the resize message:\n{content}"
+        );
+        assert!(!content.contains("Channels"));
+
+        let content = render_to_text(&state, MIN_WIDTH, MIN_HEIGHT - 1);
+        assert!(
+            content.contains("Terminal too small"),
+            "a too-short terminal should show the resize message:\n{content}"
+        );
+    }
+
+    #[test]
+    fn at_the_minimum_size_the_normal_ui_renders() {
+        let state = logged_in_state_with_messages(5);
+        let content = render_to_text(&state, MIN_WIDTH, MIN_HEIGHT);
+        assert!(
+            !content.contains("Terminal too small"),
+            "exactly the minimum size should be treated as usable:\n{content}"
+        );
+        assert!(content.contains("Channels"));
+    }
+
+    #[test]
+    fn tiny_terminal_sizes_never_panic() {
+        // ratatui's own Layout constraint solver degrades gracefully at
+        // small sizes rather than panicking, but this pins that down for
+        // every screen this app actually renders, not just relying on
+        // ratatui's own guarantees (#28).
+        for (w, h) in [(1u16, 1u16), (2, 2), (5, 3), (10, 5), (20, 8)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+
+            let logged_out = AppState::resuming();
+            terminal.draw(|frame| render(frame, &logged_out)).unwrap();
+
+            let with_messages = logged_in_state_with_messages(5);
+            terminal
+                .draw(|frame| render(frame, &with_messages))
+                .unwrap();
+        }
+    }
+
+    /// Not a pass/fail check — dumps the rendered frame at a range of sizes
+    /// so the actual on-screen result (not just "did it panic") can be
+    /// eyeballed to pick a sensible minimum-size floor. Run explicitly:
+    /// `cargo test dump_small_sizes -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn dump_small_sizes() {
+        for (w, h) in [(80u16, 24u16), (50, 12), (40, 10), (30, 8), (20, 6)] {
+            let state = logged_in_state_with_messages(5);
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            let frame = terminal.draw(|frame| render(frame, &state)).unwrap();
+            let buffer = &frame.buffer;
+            println!("=== {w}x{h} ===");
+            for y in 0..buffer.area.height {
+                let line: String = (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                println!("{line}");
+            }
+        }
     }
 
     #[test]
