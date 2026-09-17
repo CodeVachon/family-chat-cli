@@ -121,3 +121,4 @@
 {"at":"2026-09-17T15:48:08Z","id":28,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
 {"at":"2026-09-17T15:52:03Z","id":28,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-17T15:52:03Z","id":28,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
+{"at":"2026-09-17T15:52:35Z","id":5,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
