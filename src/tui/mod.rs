@@ -82,6 +82,10 @@ async fn run_app(
                     state.on_messages_loaded(channel_id, seq, result);
                     None
                 }
+                Some(Event::OlderMessagesLoaded { channel_id, result }) => {
+                    state.on_older_messages_loaded(channel_id, result);
+                    None
+                }
                 Some(Event::MessageSent { channel_id, result }) => state.on_message_sent(channel_id, result),
                 Some(Event::Realtime(event)) => state.on_realtime_event(event),
                 None => None,
@@ -108,6 +112,19 @@ async fn run_app(
                 Command::LoadMessages { channel_id, seq } => {
                     state.on_messages_loading();
                     spawn_load_messages(client.clone(), tx.clone(), channel_id, seq);
+                }
+                Command::LoadOlderMessages {
+                    channel_id,
+                    before_id,
+                    before_created_at,
+                } => {
+                    spawn_load_older_messages(
+                        client.clone(),
+                        tx.clone(),
+                        channel_id,
+                        before_id,
+                        before_created_at,
+                    );
                 }
                 Command::SendMessage { channel_id, body } => {
                     spawn_send_message(client.clone(), tx.clone(), channel_id, body);
@@ -178,15 +195,32 @@ fn spawn_load_messages(
 ) {
     tokio::spawn(async move {
         let result = client
-            .channel_messages(&channel_id)
+            .channel_messages(&channel_id, None)
             .await
-            .map(|response| response.messages);
+            .map(|response| (response.messages, response.has_more));
         log_if_err("load messages", &result);
         let _ = tx.send(Event::MessagesLoaded {
             channel_id,
             seq,
             result,
         });
+    });
+}
+
+fn spawn_load_older_messages(
+    client: ApiClient,
+    tx: mpsc::UnboundedSender<Event>,
+    channel_id: String,
+    before_id: String,
+    before_created_at: chrono::DateTime<chrono::Utc>,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .channel_messages(&channel_id, Some((&before_id, before_created_at)))
+            .await
+            .map(|response| (response.messages, response.has_more));
+        log_if_err("load older messages", &result);
+        let _ = tx.send(Event::OlderMessagesLoaded { channel_id, result });
     });
 }
 

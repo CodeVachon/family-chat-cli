@@ -103,6 +103,8 @@ pub struct Message {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessagesResponse {
     pub messages: Vec<Message>,
+    #[serde(rename = "hasMore")]
+    pub has_more: bool,
 }
 
 /// The `GET /api/v1/stream` payload (see docs/api-contract.md). Every event

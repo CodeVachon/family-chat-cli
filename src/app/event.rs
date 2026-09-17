@@ -1,6 +1,8 @@
 //! The unified event enum (things the loop reacts to) and the command enum
 //! (async side effects the pure state layer asks the loop to perform) (#12/#27).
 
+use chrono::{DateTime, Utc};
+
 use crate::api::ApiError;
 use crate::api::types::{Channel, Message, RealtimeEvent, User};
 
@@ -16,7 +18,13 @@ pub enum Event {
     MessagesLoaded {
         channel_id: String,
         seq: u64,
-        result: Result<Vec<Message>, ApiError>,
+        /// `(messages, has_more)` — `has_more` says whether the server has
+        /// even older messages beyond this page (#30/#51).
+        result: Result<(Vec<Message>, bool), ApiError>,
+    },
+    OlderMessagesLoaded {
+        channel_id: String,
+        result: Result<(Vec<Message>, bool), ApiError>,
     },
     MessageSent {
         channel_id: String,
@@ -30,10 +38,30 @@ pub enum Event {
 /// loop is what actually executes these against the `ApiClient`.
 #[derive(Debug, Clone)]
 pub enum Command {
-    SubmitLogin { email: String, password: String },
+    SubmitLogin {
+        email: String,
+        password: String,
+    },
     LoadChannels,
-    LoadMessages { channel_id: String, seq: u64 },
-    SendMessage { channel_id: String, body: String },
+    /// Fetches the *latest* page for `channel_id`, replacing whatever's
+    /// cached (a channel switch, a manual refresh, or an SSE-triggered
+    /// reload — always the newest page, never a stale one, since going back
+    /// to an already-cached channel used to silently skip refreshing it).
+    LoadMessages {
+        channel_id: String,
+        seq: u64,
+    },
+    /// Fetches the page immediately before `(before_id, before_created_at)`
+    /// — the oldest currently-loaded message — and prepends it (#30).
+    LoadOlderMessages {
+        channel_id: String,
+        before_id: String,
+        before_created_at: DateTime<Utc>,
+    },
+    SendMessage {
+        channel_id: String,
+        body: String,
+    },
     Logout,
     Quit,
 }

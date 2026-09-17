@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 
@@ -102,9 +103,26 @@ impl ApiClient {
         self.get("/api/v1/channels").await
     }
 
-    pub async fn channel_messages(&self, channel_id: &str) -> Result<MessagesResponse, ApiError> {
-        self.get(&format!("/api/v1/channels/{channel_id}/messages"))
-            .await
+    /// `before`, when given, is the oldest currently-loaded message's
+    /// `(id, created_at)` — the keyset cursor the server pages backward
+    /// from (see docs/api-contract.md). `None` fetches the latest page.
+    pub async fn channel_messages(
+        &self,
+        channel_id: &str,
+        before: Option<(&str, DateTime<Utc>)>,
+    ) -> Result<MessagesResponse, ApiError> {
+        let mut request = self.authed(
+            self.http
+                .get(self.url(&format!("/api/v1/channels/{channel_id}/messages"))),
+        );
+        if let Some((before_id, before_created_at)) = before {
+            request = request.query(&[
+                ("beforeId", before_id),
+                ("beforeCreatedAt", &before_created_at.to_rfc3339()),
+            ]);
+        }
+        let response = request.send().await?;
+        Self::json_or_error(response).await
     }
 
     /// `body_html` is a full message body (sanitized HTML — see
@@ -255,14 +273,44 @@ mod tests {
             .await;
 
         let client = ApiClient::new(server.uri());
-        let response = client.channel_messages("c1").await.unwrap();
+        let response = client.channel_messages("c1", None).await.unwrap();
 
         assert_eq!(response.messages.len(), 1);
+        assert!(!response.has_more);
         assert_eq!(response.messages[0].author.display_name(), "Dad");
         assert_eq!(
             response.messages[0].created_at.to_rfc3339(),
             "2026-09-16T12:34:56+00:00"
         );
+    }
+
+    #[tokio::test]
+    async fn channel_messages_sends_the_before_cursor_when_paginating() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .and(wiremock::matchers::query_param("beforeId", "m1"))
+            .and(wiremock::matchers::query_param(
+                "beforeCreatedAt",
+                "2026-09-16T12:34:56+00:00",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [],
+                "hasMore": true
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let cursor_time = chrono::DateTime::parse_from_rfc3339("2026-09-16T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let response = client
+            .channel_messages("c1", Some(("m1", cursor_time)))
+            .await
+            .unwrap();
+
+        assert!(response.has_more);
     }
 
     #[tokio::test]

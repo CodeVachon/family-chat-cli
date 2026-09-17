@@ -1,6 +1,6 @@
 //! State + reducer-style transitions (#12). No IO, so directly unit-testable (#42).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -63,6 +63,14 @@ pub struct LoggedInState {
     /// together — see #51).
     message_request_seq: HashMap<String, u64>,
     next_seq: u64,
+    /// Per channel: whether the server has even older messages beyond what's
+    /// cached. Absent (not yet known) is treated as "maybe" — safe to try
+    /// once. Set from every `(latest page)` and `(older page)` response,
+    /// since both carry the server's `hasMore` for that call (#30).
+    has_more: HashMap<String, bool>,
+    /// Channels with an older-page fetch currently in flight — guards
+    /// against firing a second one before the first resolves.
+    loading_older: HashSet<String>,
 }
 
 impl LoggedInState {
@@ -80,6 +88,8 @@ impl LoggedInState {
             message_scroll: 0,
             message_request_seq: HashMap::new(),
             next_seq: 0,
+            has_more: HashMap::new(),
+            loading_older: HashSet::new(),
         }
     }
 
@@ -202,7 +212,7 @@ impl AppState {
         match key.code {
             KeyCode::PageUp => {
                 state.message_scroll = state.message_scroll.saturating_add(Self::SCROLL_STEP);
-                return None;
+                return Self::maybe_load_older(state);
             }
             KeyCode::PageDown => {
                 state.message_scroll = state.message_scroll.saturating_sub(Self::SCROLL_STEP);
@@ -289,12 +299,48 @@ impl AppState {
         }
     }
 
+    /// Always re-fetches the latest page on switch, even if this channel was
+    /// already cached — an earlier version skipped refreshing an
+    /// already-cached channel, so messages posted while it wasn't selected
+    /// (SSE only reloads the *currently viewed* channel — see
+    /// `on_realtime_event`) would stay invisible until some other trigger
+    /// (manual `r`, or that channel receiving *another* live event) came
+    /// along. Switching to a channel is exactly the moment to make sure it's
+    /// current.
     fn load_selected(state: &mut LoggedInState) -> Option<Command> {
         let channel_id = state.selected_channel()?.id.clone();
-        if state.messages.contains_key(&channel_id) {
+        Some(state.request_messages(channel_id))
+    }
+
+    /// Whether we've scrolled far enough up to plausibly be nearing the top
+    /// of what's cached, and if so, requests the next older page — unless
+    /// the server already said there's nothing older, or a fetch for this
+    /// channel is already in flight.
+    ///
+    /// The trigger is `message_scroll >= cached message count`, using
+    /// *messages* as a proxy for *rendered lines* (`message_scroll` is
+    /// line-based; the state layer doesn't do HTML rendering, so it can't
+    /// know the exact wrapped line count — that's `tui::widgets`' job).
+    /// Since most chat messages render to one line, this fires at or
+    /// slightly before the true boundary — an early prefetch, not a bug.
+    fn maybe_load_older(state: &mut LoggedInState) -> Option<Command> {
+        let channel_id = state.selected_channel()?.id.clone();
+        let cached = state.messages.get(&channel_id)?;
+        if state.message_scroll < cached.len() {
             return None;
         }
-        Some(state.request_messages(channel_id))
+        if state.has_more.get(&channel_id) == Some(&false) {
+            return None;
+        }
+        if !state.loading_older.insert(channel_id.clone()) {
+            return None; // already fetching
+        }
+        let oldest = cached.first()?;
+        Some(Command::LoadOlderMessages {
+            channel_id,
+            before_id: oldest.id.clone(),
+            before_created_at: oldest.created_at,
+        })
     }
 
     pub fn on_resume_finished(&mut self, user: Option<User>) -> Option<Command> {
@@ -369,7 +415,7 @@ impl AppState {
         &mut self,
         channel_id: String,
         seq: u64,
-        result: Result<Vec<Message>, ApiError>,
+        result: Result<(Vec<Message>, bool), ApiError>,
     ) {
         let Screen::LoggedIn(state) = &mut self.screen else {
             return;
@@ -382,12 +428,62 @@ impl AppState {
         }
         state.loading_messages = false;
         match result {
-            Ok(messages) => {
+            Ok((messages, has_more)) => {
+                state.has_more.insert(channel_id.clone(), has_more);
                 state.messages.insert(channel_id, messages);
                 state.message_scroll = 0;
             }
             Err(error) => {
                 state.status = Some(format!("Couldn't load messages: {error}"));
+            }
+        }
+    }
+
+    /// The response to a `Command::LoadOlderMessages` (#30): prepends the
+    /// fetched page to what's cached for `channel_id` (safe even if the user
+    /// has since switched to a different channel — it just enriches that
+    /// channel's cache for whenever they return) and records whether the
+    /// server says there's still more beyond *that*.
+    pub fn on_older_messages_loaded(
+        &mut self,
+        channel_id: String,
+        result: Result<(Vec<Message>, bool), ApiError>,
+    ) {
+        let Screen::LoggedIn(state) = &mut self.screen else {
+            return;
+        };
+        state.loading_older.remove(&channel_id);
+        match result {
+            Ok((mut older, has_more)) => {
+                state.has_more.insert(channel_id.clone(), has_more);
+                if older.is_empty() {
+                    return;
+                }
+                let mut added = older.len();
+                if let Some(existing) = state.messages.get_mut(&channel_id) {
+                    // The server's cursor is exclusive on a millisecond
+                    // boundary and can hand back a row already in `existing`
+                    // that shares the cursor's millisecond (see
+                    // docs/api-contract.md) — drop those before merging
+                    // rather than showing a duplicate line.
+                    let existing_ids: HashSet<&str> =
+                        existing.iter().map(|m| m.id.as_str()).collect();
+                    older.retain(|m| !existing_ids.contains(m.id.as_str()));
+                    added = older.len();
+                    older.append(existing);
+                    *existing = older;
+                }
+                // Keep the viewport anchored on what the user was already
+                // reading rather than jumping now that older content exists
+                // above it. Approximate (assumes ~1 rendered line per
+                // message, usually right for short chat text) for the same
+                // reason `maybe_load_older`'s trigger is approximate.
+                if state.selected_channel().is_some_and(|c| c.id == channel_id) {
+                    state.message_scroll = state.message_scroll.saturating_add(added);
+                }
+            }
+            Err(error) => {
+                state.status = Some(format!("Couldn't load older messages: {error}"));
             }
         }
     }
@@ -451,7 +547,10 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
+    use crate::api::types::MessageAuthor;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -703,7 +802,7 @@ mod tests {
         assert_ne!(first_seq, second_seq);
 
         // The newer request's response arrives first and is accepted...
-        state.on_messages_loaded("c1".to_string(), second_seq, Ok(vec![]));
+        state.on_messages_loaded("c1".to_string(), second_seq, Ok((vec![], false)));
         // ...then the older, slower response arrives and must be ignored,
         // not overwrite the newer (already-applied) result.
         state.on_messages_loaded(
@@ -722,6 +821,127 @@ mod tests {
             "the stale error must not surface"
         );
         assert!(logged_in.messages.get("c1").is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn scrolling_past_the_cached_history_requests_an_older_page() {
+        let mut state = logged_in_with_cached_messages(5, true);
+        // 5 messages cached; SCROLL_STEP is 10 lines per press, already at
+        // or past the message-count proxy on the very first press.
+        let command = state.on_key(key(KeyCode::PageUp));
+        match command {
+            Some(Command::LoadOlderMessages {
+                channel_id,
+                before_id,
+                ..
+            }) => {
+                assert_eq!(channel_id, "c1");
+                assert_eq!(before_id, "m0"); // the oldest cached message
+            }
+            other => panic!("expected LoadOlderMessages, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_second_page_up_does_not_duplicate_the_in_flight_older_page_request() {
+        let mut state = logged_in_with_cached_messages(5, true);
+        assert!(state.on_key(key(KeyCode::PageUp)).is_some());
+        assert!(
+            state.on_key(key(KeyCode::PageUp)).is_none(),
+            "already loading — must not fire a second request"
+        );
+    }
+
+    #[test]
+    fn has_more_false_stops_requesting_older_pages() {
+        let mut state = logged_in_with_cached_messages(5, false);
+        assert!(state.on_key(key(KeyCode::PageUp)).is_none());
+    }
+
+    #[test]
+    fn older_messages_are_prepended_and_the_scroll_position_is_preserved() {
+        let mut state = logged_in_with_cached_messages(5, true);
+        state.on_key(key(KeyCode::PageUp)); // triggers the fetch, marks it in flight
+
+        let scroll_before = {
+            let Screen::LoggedIn(s) = &state.screen else {
+                unreachable!()
+            };
+            s.message_scroll
+        };
+        let older = vec![Message {
+            id: "m_old".to_string(),
+            kind: "user".to_string(),
+            body: "<p>older</p>".to_string(),
+            created_at: Utc::now(),
+            deleted_at: None,
+            author: MessageAuthor {
+                id: "u1".into(),
+                name: "Chris".into(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+        }];
+        state.on_older_messages_loaded("c1".to_string(), Ok((older, false)));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let cached = logged_in.messages.get("c1").unwrap();
+        assert_eq!(cached.len(), 6);
+        assert_eq!(cached[0].id, "m_old", "older messages come first");
+        assert_eq!(logged_in.message_scroll, scroll_before + 1);
+
+        // has_more is now known false — a further PageUp must not fetch again.
+        assert!(state.on_key(key(KeyCode::PageUp)).is_none());
+    }
+
+    #[test]
+    fn an_older_page_overlapping_the_cached_boundary_does_not_duplicate_messages() {
+        // The server's cursor is exclusive on a millisecond boundary (see
+        // docs/api-contract.md) and can hand back a row already cached —
+        // this is that exact case: the "older" page's last message is the
+        // same id as the existing cache's first (oldest) message.
+        let mut state = logged_in_with_cached_messages(5, true);
+        state.on_key(key(KeyCode::PageUp));
+
+        let mut older: Vec<Message> = (0..3)
+            .map(|i| Message {
+                id: format!("old{i}"),
+                kind: "user".to_string(),
+                body: format!("<p>old-{i}</p>"),
+                created_at: Utc::now(),
+                deleted_at: None,
+                author: MessageAuthor {
+                    id: "u1".into(),
+                    name: "Chris".into(),
+                    preferences: None,
+                },
+                attachments: Vec::new(),
+            })
+            .collect();
+        older.push(Message {
+            id: "m0".to_string(), // duplicates the existing cache's oldest message
+            kind: "user".to_string(),
+            body: "<p>msg-0</p>".to_string(),
+            created_at: Utc::now(),
+            deleted_at: None,
+            author: MessageAuthor {
+                id: "u1".into(),
+                name: "Chris".into(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+        });
+        state.on_older_messages_loaded("c1".to_string(), Ok((older, false)));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let cached = logged_in.messages.get("c1").unwrap();
+        // 3 genuinely new + 5 original = 8, not 9 — the duplicate "m0" was dropped.
+        assert_eq!(cached.len(), 8);
+        assert_eq!(cached.iter().filter(|m| m.id == "m0").count(), 1);
     }
 
     /// A logged-in state with N channels named `c1..cN`, ready for
@@ -748,6 +968,48 @@ mod tests {
             })
             .collect();
         state.on_channels_loaded(Ok(channels));
+        state
+    }
+
+    /// A logged-in state with one channel ("c1") already holding `count`
+    /// cached messages (ids `m0..m{count}`, oldest first), as if an initial
+    /// load already completed.
+    fn logged_in_with_cached_messages(count: usize, has_more: bool) -> AppState {
+        let mut state = AppState::resuming();
+        state.on_resume_finished(Some(User {
+            id: "u1".into(),
+            name: "Chris".into(),
+            email: "chris@example.com".into(),
+            approval_status: "approved".into(),
+        }));
+        let channels = vec![Channel {
+            id: "c1".into(),
+            name: "General".into(),
+            description: None,
+            is_private: false,
+            is_archived: false,
+            is_favorite: false,
+            unread_count: 0,
+        }];
+        let Some(Command::LoadMessages { seq, .. }) = state.on_channels_loaded(Ok(channels)) else {
+            panic!("expected the initial channel load to request messages");
+        };
+        let messages: Vec<Message> = (0..count)
+            .map(|i| Message {
+                id: format!("m{i}"),
+                kind: "user".to_string(),
+                body: format!("<p>msg-{i}</p>"),
+                created_at: Utc::now(),
+                deleted_at: None,
+                author: MessageAuthor {
+                    id: "u1".into(),
+                    name: "Chris".into(),
+                    preferences: None,
+                },
+                attachments: Vec::new(),
+            })
+            .collect();
+        state.on_messages_loaded("c1".to_string(), seq, Ok((messages, has_more)));
         state
     }
 }

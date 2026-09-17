@@ -444,7 +444,7 @@ mod tests {
                 attachments: Vec::new(),
             })
             .collect();
-        state.on_messages_loaded("c1".to_string(), seq, Ok(messages));
+        state.on_messages_loaded("c1".to_string(), seq, Ok((messages, false)));
         state
     }
 
@@ -569,7 +569,7 @@ mod tests {
                 ..msg("m5", author("u2", "Louise"), "<p>view from the porch</p>")
             },
         ];
-        state.on_messages_loaded("c1".to_string(), seq, Ok(messages));
+        state.on_messages_loaded("c1".to_string(), seq, Ok((messages, false)));
 
         // Raw mode + alternate screen (reusing the app's own lifecycle, not
         // a bare CrosstermBackend) — otherwise this draws over whatever
