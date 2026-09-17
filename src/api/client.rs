@@ -243,6 +243,7 @@ mod tests {
                         "createdAt": "2026-09-16T12:34:56.000Z",
                         "deletedAt": null,
                         "author": {
+                            "id": "u1",
                             "name": "Chris",
                             "preferences": { "displayName": "Dad" }
                         }

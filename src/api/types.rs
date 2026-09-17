@@ -54,6 +54,7 @@ pub struct MessageAuthorPreferences {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageAuthor {
+    pub id: String,
     pub name: String,
     pub preferences: Option<MessageAuthorPreferences>,
 }
@@ -69,6 +70,21 @@ impl MessageAuthor {
     }
 }
 
+/// One uploaded image/video/pdf/file (Cloudinary-hosted — see
+/// docs/api-contract.md). `width`/`height` are only meaningful for `image`
+/// (and sometimes `video`); the server sends `null` for the rest, hence
+/// `Option`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Attachment {
+    pub kind: String,
+    #[serde(rename = "secureUrl")]
+    pub secure_url: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    #[serde(rename = "originalFilename")]
+    pub original_filename: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     pub id: String,
@@ -80,6 +96,8 @@ pub struct Message {
     #[serde(rename = "deletedAt")]
     pub deleted_at: Option<DateTime<Utc>>,
     pub author: MessageAuthor,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
