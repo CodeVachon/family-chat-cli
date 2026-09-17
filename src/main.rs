@@ -6,6 +6,7 @@ mod config;
 mod text;
 mod tui;
 
+use anyhow::Context;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
@@ -16,6 +17,9 @@ use auth::KeyringStore;
 /// the config file's `server` is set.
 const DEFAULT_SERVER: &str = "https://chat.thevachonfamily.ca";
 
+/// The keyring profile to use when the config file doesn't set one.
+const DEFAULT_PROFILE: &str = "default";
+
 fn main() -> anyhow::Result<()> {
     let _log_guard = init_logging()?;
     install_panic_hook();
@@ -23,7 +27,18 @@ fn main() -> anyhow::Result<()> {
     let args = cli::Cli::parse();
     let config = config::load()?;
     let server = resolve_server(args.server, config.server);
-    let store = KeyringStore::new("default")?;
+    let profile = config
+        .profile
+        .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
+    // The credential store is namespaced by profile *and* server origin
+    // (#36) — otherwise switching --server under the same profile could
+    // silently reuse (or clobber) a session token that belongs to a
+    // different server.
+    let origin = url::Url::parse(&server)
+        .with_context(|| format!("server URL '{server}' is not valid"))?
+        .origin()
+        .ascii_serialization();
+    let store = KeyringStore::new(&profile, &origin)?;
     let client = ApiClient::new(server);
 
     tokio::runtime::Builder::new_multi_thread()

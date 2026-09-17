@@ -23,10 +23,9 @@ pub struct Config {
 
     /// Which keyring/session profile to use (see `auth::KeyringStore`),
     /// letting more than one account or environment keep separate stored
-    /// sessions rather than one clobbering the other's (#36 — not yet
-    /// consumed anywhere, `KeyringStore::new` is still hardcoded to
-    /// "default").
-    #[allow(dead_code)]
+    /// sessions rather than one clobbering the other's (#36 — combined with
+    /// the server's origin, not used alone, so a profile reused against a
+    /// different server never collides with the wrong session).
     pub profile: Option<String>,
 
     /// The channel to select on startup, matched by name. Not yet consumed
