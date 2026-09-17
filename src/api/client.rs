@@ -161,6 +161,25 @@ impl ApiClient {
         }
     }
 
+    /// `POST /channels/:id/read` — tells the server the current user has
+    /// caught up on this channel, clearing its unread count for every
+    /// client (#33). No request body; confirmed live against the real
+    /// server that it responds 204 with no content.
+    pub async fn mark_channel_read(&self, channel_id: &str) -> Result<(), ApiError> {
+        let response = self
+            .authed(
+                self.http
+                    .post(self.url(&format!("/api/v1/channels/{channel_id}/read"))),
+            )
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::from_response(response).await)
+        }
+    }
+
     /// An authenticated, unsent request for `GET /api/v1/stream` — handed to
     /// `reqwest_eventsource::EventSource`, which owns actually sending it
     /// (and re-sending it on reconnect).
@@ -300,6 +319,21 @@ mod tests {
             response.members[1].avatar_url.as_deref(),
             Some("https://res.cloudinary.com/example.jpg")
         );
+    }
+
+    /// The real server responds 204 with no body — `json_or_error` isn't
+    /// used here for exactly that reason.
+    #[tokio::test]
+    async fn mark_channel_read_succeeds_on_a_204_with_no_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/channels/c1/read"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        client.mark_channel_read("c1").await.unwrap();
     }
 
     #[tokio::test]

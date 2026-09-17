@@ -107,10 +107,23 @@ impl LoggedInState {
     /// Builds a `LoadMessages` command and records it as the latest
     /// outstanding request for `channel_id`, so a response can later be
     /// checked for staleness against whatever request superseded it.
+    ///
+    /// Every call site passes the channel currently being viewed (a switch,
+    /// a manual refresh, or a realtime event for the already-selected
+    /// channel — see `on_realtime_event`), so this is also the right place
+    /// to optimistically clear that channel's local unread badge (#33): the
+    /// server is told separately (`tui::run`'s `Command::LoadMessages`
+    /// handling also calls `mark_channel_read`), but the badge shouldn't
+    /// wait on that round trip to disappear.
     fn request_messages(&mut self, channel_id: String) -> Command {
         self.next_seq += 1;
         self.message_request_seq
             .insert(channel_id.clone(), self.next_seq);
+        if let Some(channels) = &mut self.channels
+            && let Some(channel) = channels.iter_mut().find(|c| c.id == channel_id)
+        {
+            channel.unread_count = 0;
+        }
         Command::LoadMessages {
             channel_id,
             seq: self.next_seq,
@@ -547,8 +560,13 @@ impl AppState {
         match event {
             RealtimeEvent::Ready | RealtimeEvent::Other => None,
             // A full reload naturally re-requests the selected channel's
-            // messages too, via on_channels_loaded.
-            RealtimeEvent::Resync | RealtimeEvent::ChannelsChanged => Some(Command::LoadChannels),
+            // messages too, via on_channels_loaded. ReadUpdated (#33) rides
+            // along here too — refetching channels is always correct for
+            // picking up a changed unread count, even without knowing the
+            // event's exact payload shape.
+            RealtimeEvent::Resync | RealtimeEvent::ChannelsChanged | RealtimeEvent::ReadUpdated => {
+                Some(Command::LoadChannels)
+            }
             RealtimeEvent::MessageCreated { channel_id }
             | RealtimeEvent::MessageUpdated { channel_id }
             | RealtimeEvent::MessageDeleted { channel_id } => {
@@ -789,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn resync_and_channels_changed_reload_channels() {
+    fn resync_channels_changed_and_read_updated_reload_channels() {
         let mut state = logged_in_with_channels(["General"]);
         assert!(matches!(
             state.on_realtime_event(RealtimeEvent::Resync),
@@ -799,8 +817,61 @@ mod tests {
             state.on_realtime_event(RealtimeEvent::ChannelsChanged),
             Some(Command::LoadChannels)
         ));
+        assert!(matches!(
+            state.on_realtime_event(RealtimeEvent::ReadUpdated),
+            Some(Command::LoadChannels)
+        ));
         assert!(state.on_realtime_event(RealtimeEvent::Ready).is_none());
         assert!(state.on_realtime_event(RealtimeEvent::Other).is_none());
+    }
+
+    #[test]
+    fn selecting_a_channel_clears_its_local_unread_count() {
+        let mut state = logged_in_with_channels(["General"]);
+        // Simulate the server reporting unread activity for the
+        // still-selected channel (e.g. a resync/channels.changed reload) —
+        // since the client is actively viewing it, the local badge should
+        // clear immediately rather than show a stale nonzero count until a
+        // mark-read round trip completes (#33).
+        state.on_channels_loaded(Ok(vec![Channel {
+            id: "c1".into(),
+            name: "General".into(),
+            description: None,
+            is_private: false,
+            is_archived: false,
+            is_favorite: false,
+            unread_count: 5,
+        }]));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.selected_channel().unwrap().unread_count, 0);
+    }
+
+    #[test]
+    fn switching_channels_clears_only_the_newly_selected_ones_unread_count() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+        if let Screen::LoggedIn(logged_in) = &mut state.screen {
+            for channel in logged_in.channels.as_mut().unwrap() {
+                channel.unread_count = 3;
+            }
+        }
+
+        state.on_key(key(KeyCode::Down)); // select "Random" (c2)
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let channels = logged_in.channels.as_ref().unwrap();
+        assert_eq!(
+            channels[0].unread_count, 3,
+            "General wasn't selected, its count should be untouched"
+        );
+        assert_eq!(
+            channels[1].unread_count, 0,
+            "Random was just selected, its count should be cleared"
+        );
     }
 
     #[test]

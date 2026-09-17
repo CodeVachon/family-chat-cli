@@ -151,8 +151,8 @@ pub struct MessagesResponse {
 /// to the SSE `event:` field at all.
 ///
 /// Only the kinds this prototype acts on get their own variant; everything
-/// else (typing, presence, reactions, mentions, read receipts, users/settings
-/// changes — nothing the TUI renders yet) falls into `Other` and is ignored.
+/// else (typing, presence, reactions, mentions, users/settings changes —
+/// nothing the TUI renders yet) falls into `Other` and is ignored.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum RealtimeEvent {
@@ -164,6 +164,14 @@ pub enum RealtimeEvent {
     Resync,
     #[serde(rename = "channels.changed")]
     ChannelsChanged,
+    /// Someone (this client or another one, e.g. the web app) marked a
+    /// channel read — refetch channels to pick up the new unread counts
+    /// (#33). The exact payload shape isn't confirmed against a live event
+    /// yet, so this ignores it and just triggers the same full reload
+    /// `ChannelsChanged` does, which is always correct even if a more
+    /// targeted update would also be possible.
+    #[serde(rename = "read.updated")]
+    ReadUpdated,
     #[serde(rename = "message.created")]
     MessageCreated {
         #[serde(rename = "channelId")]
@@ -213,5 +221,12 @@ mod tests {
             .expect("system_event should be present");
         assert_eq!(event.event, "channel_updated");
         assert_eq!(event.subject_user_id, None);
+    }
+
+    #[test]
+    fn a_read_updated_event_deserializes() {
+        let event: RealtimeEvent =
+            serde_json::from_str(r#"{"type": "read.updated"}"#).expect("should deserialize");
+        assert!(matches!(event, RealtimeEvent::ReadUpdated));
     }
 }

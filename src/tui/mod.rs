@@ -112,6 +112,15 @@ async fn run_app(
                 Command::LoadMessages { channel_id, seq } => {
                     tracing::info!(channel_id = %channel_id, seq, "requesting latest messages");
                     state.on_messages_loading();
+                    // Every LoadMessages is for the channel currently being
+                    // viewed (see `app::state::request_messages`'s doc
+                    // comment) — that's exactly when the server should also
+                    // be told the user has caught up (#33). Fire-and-forget:
+                    // the unread badge is already cleared locally, and a
+                    // failure here just leaves the server's own count
+                    // briefly stale, logged for diagnosis like every other
+                    // command (see `log_if_err`).
+                    spawn_mark_channel_read(client.clone(), channel_id.clone());
                     spawn_load_messages(client.clone(), tx.clone(), channel_id, seq);
                 }
                 Command::LoadOlderMessages {
@@ -238,6 +247,18 @@ fn spawn_send_message(
         let result = client.send_message(&channel_id, &html).await;
         log_if_err("send message", &result);
         let _ = tx.send(Event::MessageSent { channel_id, result });
+    });
+}
+
+/// Fire-and-forget (#33) — the local unread badge is already cleared
+/// synchronously by `app::state::request_messages`; this just tells the
+/// server so every other client sees the same cleared count too. No
+/// `Event` is sent back: nothing in the UI needs to react to this
+/// succeeding or failing beyond what's already logged.
+fn spawn_mark_channel_read(client: ApiClient, channel_id: String) {
+    tokio::spawn(async move {
+        let result = client.mark_channel_read(&channel_id).await;
+        log_if_err("mark channel read", &result);
     });
 }
 
