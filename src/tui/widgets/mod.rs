@@ -1,5 +1,6 @@
 //! Channel list, message pane, composer, and auth-status widgets (#24/#26).
 
+use chrono::Local;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -300,7 +301,10 @@ fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize
 fn message_lines(message: &Message) -> Vec<Line<'static>> {
     let prefix = vec![
         Span::styled(
-            format!("[{}] ", message.created_at.format("%H:%M")),
+            format!(
+                "[{}] ",
+                message.created_at.with_timezone(&Local).format("%H:%M")
+            ),
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
