@@ -44,7 +44,12 @@ impl Config {
     /// explicitly-blank server URL, a syntactically invalid one, a
     /// non-http(s) scheme, and a profile name that couldn't safely be used
     /// as a keyring namespace component (see `auth::KeyringStore`, which
-    /// takes the profile as a plain string service-name suffix).
+    /// takes the profile as a plain string service-name suffix). Also
+    /// enforces the credential security policy's HTTPS requirement (#52,
+    /// see `docs/security-policy.md`) for this field specifically — the
+    /// same check also runs on the fully resolved server (config, CLI flag,
+    /// or env var) in `main`, since this validation only ever sees the
+    /// config file's own value.
     fn validate(&self) -> anyhow::Result<()> {
         if let Some(server) = &self.server {
             if server.trim().is_empty() {
@@ -60,6 +65,7 @@ impl Config {
                     url.scheme()
                 );
             }
+            require_https_outside_local_dev(&url)?;
         }
         if let Some(profile) = &self.profile {
             let valid = !profile.is_empty()
@@ -73,6 +79,34 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+/// The credential security policy (#52, see `docs/security-policy.md`)
+/// requires https for every server this app talks to, except a host that's
+/// unambiguously local development — otherwise a bearer token (or the
+/// sign-in password) would go out in plaintext over the network to
+/// anything else. Called on every candidate server URL: the config file's
+/// own value (via `Config::validate`) and the fully resolved one `main`
+/// actually connects to (config, `--server`, or `FAMILY_CHAT_URL`), since a
+/// CLI flag or env var never goes through `Config::validate` at all.
+pub fn require_https_outside_local_dev(url: &url::Url) -> anyhow::Result<()> {
+    if url.scheme() == "https" || is_local_dev_host(url) {
+        return Ok(());
+    }
+    bail!(
+        "server URL '{url}' uses '{}' — only https is allowed, except for local development \
+         (localhost/127.0.0.1/::1)",
+        url.scheme()
+    );
+}
+
+fn is_local_dev_host(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => domain == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
@@ -241,6 +275,44 @@ mod tests {
             ..Config::default()
         };
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn a_plain_http_server_url_against_a_real_host_fails_validation() {
+        // The credential security policy (#52): a bearer token (or the
+        // sign-in password) must never go out over plaintext http to
+        // anything but local development.
+        let config = Config {
+            server: Some("http://chat.example.com".to_string()),
+            ..Config::default()
+        };
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("https"), "unexpected message: {error}");
+    }
+
+    #[test]
+    fn require_https_outside_local_dev_allows_http_for_localhost_and_loopback_ips() {
+        for url in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+        ] {
+            require_https_outside_local_dev(&url::Url::parse(url).unwrap())
+                .unwrap_or_else(|error| panic!("{url} should be allowed over http: {error}"));
+        }
+    }
+
+    #[test]
+    fn require_https_outside_local_dev_rejects_http_for_a_real_host() {
+        let url = url::Url::parse("http://chat.thevachonfamily.ca").unwrap();
+        assert!(require_https_outside_local_dev(&url).is_err());
+    }
+
+    #[test]
+    fn require_https_outside_local_dev_always_allows_https() {
+        // https is fine regardless of host, local or not.
+        let url = url::Url::parse("https://localhost:3000").unwrap();
+        require_https_outside_local_dev(&url).unwrap();
     }
 
     #[test]
