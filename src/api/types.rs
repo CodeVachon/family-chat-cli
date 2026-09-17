@@ -46,6 +46,28 @@ pub struct ChannelsResponse {
     pub channels: Vec<Channel>,
 }
 
+/// One row of `GET /channels/:id/members` — the server has no flat,
+/// cross-channel "list all users" endpoint (confirmed against the live
+/// server and docs/api-contract.md's resource list), only per-channel
+/// membership and a single-user profile lookup. This is the closest match
+/// to a "list users" capability, scoped to one channel at a time.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChannelMember {
+    #[serde(rename = "userId")]
+    pub user_id: String,
+    pub role: String,
+    pub name: String,
+    #[serde(rename = "colorHue")]
+    pub color_hue: Option<i64>,
+    #[serde(rename = "avatarUrl")]
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChannelMembersResponse {
+    pub members: Vec<ChannelMember>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageAuthorPreferences {
     #[serde(rename = "displayName")]

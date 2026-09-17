@@ -7,7 +7,9 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 
 use super::error::ApiError;
-use super::types::{ChannelsResponse, MeResponse, MessagesResponse, SignInResponse};
+use super::types::{
+    ChannelMembersResponse, ChannelsResponse, MeResponse, MessagesResponse, SignInResponse,
+};
 
 #[derive(Clone)]
 pub struct ApiClient {
@@ -101,6 +103,19 @@ impl ApiClient {
 
     pub async fn list_channels(&self) -> Result<ChannelsResponse, ApiError> {
         self.get("/api/v1/channels").await
+    }
+
+    /// `GET /channels/:id/members` — the nearest thing to "list users" the
+    /// server exposes (see `ChannelMember`'s doc comment for why this is
+    /// per-channel rather than instance-wide). Not yet consumed by the TUI
+    /// (see #50), hence the `#[allow(dead_code)]`.
+    #[allow(dead_code)]
+    pub async fn channel_members(
+        &self,
+        channel_id: &str,
+    ) -> Result<ChannelMembersResponse, ApiError> {
+        self.get(&format!("/api/v1/channels/{channel_id}/members"))
+            .await
     }
 
     /// `before`, when given, is the oldest currently-loaded message's
@@ -245,6 +260,46 @@ mod tests {
         assert_eq!(response.channels.len(), 1);
         assert_eq!(response.channels[0].name, "General");
         assert_eq!(response.channels[0].unread_count, 3);
+    }
+
+    /// Payload shape confirmed live against the real server for a channel
+    /// with a mix of a null-avatar owner and members with avatars.
+    #[tokio::test]
+    async fn channel_members_parses_the_real_server_shape() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/channels/c1/members"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "members": [
+                    {
+                        "userId": "u1",
+                        "role": "owner",
+                        "name": "Louise",
+                        "colorHue": 220,
+                        "avatarUrl": null
+                    },
+                    {
+                        "userId": "u2",
+                        "role": "user",
+                        "name": "Christopher",
+                        "colorHue": 210,
+                        "avatarUrl": "https://res.cloudinary.com/example.jpg"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let response = client.channel_members("c1").await.unwrap();
+
+        assert_eq!(response.members.len(), 2);
+        assert_eq!(response.members[0].role, "owner");
+        assert_eq!(response.members[0].avatar_url, None);
+        assert_eq!(
+            response.members[1].avatar_url.as_deref(),
+            Some("https://res.cloudinary.com/example.jpg")
+        );
     }
 
     #[tokio::test]
