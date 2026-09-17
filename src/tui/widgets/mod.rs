@@ -14,18 +14,18 @@ use crate::text::html;
 
 use super::layout::split;
 
-/// Below this, the two fixed-width side columns (28-col channels sidebar +
-/// 24-col users pane, see `layout::split`) alone leave little to nothing
-/// for the main pane, and message text wraps into an unreadable
-/// single-word-per-line column — confirmed by rendering the real layout at
-/// a range of sizes (see the `dump_small_sizes` test) rather than picking a
-/// number blind. Re-derived (50 → 80) when the users pane (#50) added a
-/// second fixed-width column, since the old floor left the main pane at
-/// zero width. Nothing panics below this floor either way (ratatui's
+/// Below this, the fixed-width sidebar (28 cols, see `layout::split`) alone
+/// leaves little to nothing for the main pane, and message text wraps into
+/// an unreadable single-word-per-line column — confirmed by rendering the
+/// real layout at a range of sizes (see the `dump_small_sizes` test) rather
+/// than picking a number blind. Briefly 80 while the users pane (#50) was a
+/// separate fixed-width column of its own; back to 50 now that it moved
+/// into the sidebar (stacked under the channel list) instead, which costs
+/// height, not width. Nothing panics below this floor either way (ratatui's
 /// constraint solver degrades gracefully, see
 /// `tiny_terminal_sizes_never_panic`) — this is purely so a too-small
 /// terminal gets one clear message instead of an unusably squeezed layout.
-const MIN_WIDTH: u16 = 80;
+const MIN_WIDTH: u16 = 50;
 const MIN_HEIGHT: u16 = 12;
 
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -188,6 +188,22 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         .areas(layout.main);
 
     let channels = state.channels.as_deref().unwrap_or(&[]);
+    // The channels list only ever needs as many rows as there are channels
+    // (+2 for its own border) — giving the users pane a fixed share of the
+    // sidebar left most of it empty under a short channel list. Sized to
+    // content instead, with the users pane taking whatever's left.
+    let channels_height = if state.channels_error.is_some() && channels.is_empty() {
+        // Content-sizing this to `channels.len()` (zero here) would squeeze
+        // a real, possibly multi-line wrapped error message down to little
+        // more than the pane's own border — give it real room instead.
+        10
+    } else {
+        (channels.len() as u16).saturating_add(2).max(3)
+    };
+    let [channels_area, users_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(channels_height), Constraint::Min(0)])
+        .areas(layout.sidebar);
     let sidebar_style = focus_style(state.focus == LoggedInFocus::Channels);
     // A load failure is pane-local (#26): shown inside the channels pane
     // itself, not a shared status line with no indication of which request
@@ -215,14 +231,15 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
                             .title(sidebar_title)
                             .style(sidebar_style),
                     ),
-                layout.sidebar,
+                channels_area,
             );
         } else {
-            render_channel_list(frame, layout.sidebar, state, channels, sidebar_title);
+            render_channel_list(frame, channels_area, state, channels, sidebar_title);
         }
     } else {
-        render_channel_list(frame, layout.sidebar, state, channels, sidebar_title);
+        render_channel_list(frame, channels_area, state, channels, sidebar_title);
     }
+    render_users(frame, users_area, state);
 
     let selected_channel_title = state
         .selected_channel()
@@ -300,8 +317,6 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         let cursor_x = cursor_x.min(compose_area.x + compose_area.width.saturating_sub(2));
         frame.set_cursor_position((cursor_x, compose_area.y + 1));
     }
-
-    render_users(frame, layout.users, state);
 
     let hint = format!(
         "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · Enter send · r refresh · l logout · q quit",
@@ -1012,7 +1027,7 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_small_sizes() {
-        for (w, h) in [(100u16, 24u16), (80, 18), (80, 12), (70, 16), (50, 12)] {
+        for (w, h) in [(100u16, 24u16), (60, 15), (50, 12), (45, 12), (60, 10)] {
             let state = logged_in_state_with_messages(5);
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             let frame = terminal.draw(|frame| render(frame, &state)).unwrap();

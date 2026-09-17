@@ -5,7 +5,6 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 pub struct AppLayout {
     pub sidebar: Rect,
     pub main: Rect,
-    pub users: Rect,
     pub status: Rect,
 }
 
@@ -14,18 +13,13 @@ pub fn split(area: Rect) -> AppLayout {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .areas(area);
-    let [sidebar, main, users] = Layout::default()
+    let [sidebar, main] = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(28),
-            Constraint::Min(0),
-            Constraint::Length(24),
-        ])
+        .constraints([Constraint::Length(28), Constraint::Min(0)])
         .areas(body);
     AppLayout {
         sidebar,
         main,
-        users,
         status,
     }
 }
