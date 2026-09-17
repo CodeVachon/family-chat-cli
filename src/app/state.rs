@@ -899,6 +899,9 @@ mod tests {
             is_archived: false,
             is_favorite: false,
             unread_count: 5,
+            color: None,
+            my_role: "owner".to_string(),
+            mention_count: 0,
         }]));
 
         let Screen::LoggedIn(logged_in) = &state.screen else {
@@ -992,6 +995,9 @@ mod tests {
                 is_archived: false,
                 is_favorite: false,
                 unread_count: 0,
+                color: None,
+                my_role: "owner".to_string(),
+                mention_count: 0,
             },
             Channel {
                 id: "c2".into(),
@@ -1001,6 +1007,9 @@ mod tests {
                 is_archived: false,
                 is_favorite: false,
                 unread_count: 0,
+                color: None,
+                my_role: "owner".to_string(),
+                mention_count: 0,
             },
         ]));
         assert!(
@@ -1195,6 +1204,9 @@ mod tests {
                 is_archived: false,
                 is_favorite: false,
                 unread_count: 0,
+                color: None,
+                my_role: "owner".to_string(),
+                mention_count: 0,
             })
             .collect();
         state.on_channels_loaded(Ok(channels));
@@ -1220,6 +1232,9 @@ mod tests {
             is_archived: false,
             is_favorite: false,
             unread_count: 0,
+            color: None,
+            my_role: "owner".to_string(),
+            mention_count: 0,
         }];
         let Some(Command::LoadMessages { seq, .. }) = state.on_channels_loaded(Ok(channels)) else {
             panic!("expected the initial channel load to request messages");

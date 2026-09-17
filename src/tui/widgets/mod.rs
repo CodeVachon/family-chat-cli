@@ -200,9 +200,24 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     } else {
         (channels.len() as u16).saturating_add(2).max(3)
     };
-    let [channels_area, users_area] = Layout::default()
+    let info_lines = channel_info_lines(state.selected_channel());
+    // Wrapped row count, not logical line count — the same distinction
+    // `windowed()` exists for on the messages side. A flags line like
+    // "Private · ★ Favorite · Archived" easily exceeds the sidebar's ~26
+    // usable columns and wraps onto a second row; sizing this pane by raw
+    // line count reserved one row too few, silently clipping whatever line
+    // came after the wrapped one (caught by a real test failure, not just
+    // reasoning about it).
+    let info_height = wrapped_row_count(&info_lines, visible_cols(layout.sidebar))
+        .saturating_add(2)
+        .max(3);
+    let [channels_area, info_area, users_area] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(channels_height), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(channels_height),
+            Constraint::Length(info_height),
+            Constraint::Min(0),
+        ])
         .areas(layout.sidebar);
     let sidebar_style = focus_style(state.focus == LoggedInFocus::Channels);
     // A load failure is pane-local (#26): shown inside the channels pane
@@ -239,6 +254,12 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     } else {
         render_channel_list(frame, channels_area, state, channels, sidebar_title);
     }
+    frame.render_widget(
+        Paragraph::new(Text::from(info_lines))
+            .block(Block::default().borders(Borders::ALL).title("Info"))
+            .wrap(Wrap { trim: false }),
+        info_area,
+    );
     render_users(frame, users_area, state);
 
     let selected_channel_title = state
@@ -325,6 +346,43 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     frame.render_widget(Paragraph::new(hint), layout.status);
 }
 
+/// The selected channel's metadata not otherwise shown anywhere: its
+/// description, public/private + favorite/archived flags, and the current
+/// user's role in it. All of this was already in `Channel` (or newly added
+/// alongside it) but never surfaced.
+fn channel_info_lines(channel: Option<&Channel>) -> Vec<Line<'static>> {
+    let Some(channel) = channel else {
+        return vec![Line::from("No channel selected.")];
+    };
+
+    let mut lines = Vec::new();
+    if let Some(description) = channel.description.as_deref().filter(|d| !d.is_empty()) {
+        lines.push(Line::from(description.to_string()));
+    }
+
+    let mut flags = vec![
+        if channel.is_private {
+            "Private"
+        } else {
+            "Public"
+        }
+        .to_string(),
+    ];
+    if channel.is_favorite {
+        flags.push("★ Favorite".to_string());
+    }
+    if channel.is_archived {
+        flags.push("Archived".to_string());
+    }
+    lines.push(Line::from(flags.join(" · ")));
+
+    if !channel.my_role.is_empty() {
+        lines.push(Line::from(format!("Role: {}", channel.my_role)));
+    }
+
+    lines
+}
+
 /// The current channel's member list (#50) — read-only, no selection/focus
 /// of its own (nothing in the app yet acts on a specific selected member;
 /// see the ticket's note for why this stayed a display-only pane). An
@@ -383,6 +441,18 @@ fn visible_cols(area: Rect) -> usize {
     area.width.saturating_sub(2) as usize
 }
 
+/// How many rendered rows `lines` actually take when wrapped at `width`
+/// columns — used to size a content-fitted pane (see `channel_info_lines`'s
+/// call site) so it reserves enough room for lines that wrap, the same
+/// wrapped-vs-logical distinction `windowed` makes for the message pane.
+fn wrapped_row_count(lines: &[Line], width: usize) -> u16 {
+    let width = width.max(1);
+    lines
+        .iter()
+        .map(|line| line.width().div_ceil(width).max(1) as u16)
+        .sum()
+}
+
 /// The suffix of `lines` that fits within `height` *rendered* rows at `width`
 /// columns, offset upward by `scroll` lines — i.e. what a bottom-anchored,
 /// scroll-up-for-history pane shows.
@@ -439,6 +509,20 @@ fn windowed_messages(
     )
 }
 
+/// Parses a `"#rrggbb"` hex color (the server's channel color field) into a
+/// ratatui `Color`. `None` for anything else — malformed or absent, treated
+/// the same as no color set rather than a rendering error.
+fn parse_hex_color(hex: &str) -> Option<Color> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::Rgb(r, g, b))
+}
+
 /// The channel list, rendered as-is — split out so the channels pane can
 /// still show a previously-loaded list even when a later background reload
 /// fails (see `logged_in_view`'s `channels_error` handling).
@@ -453,15 +537,31 @@ fn render_channel_list(
         .iter()
         .enumerate()
         .map(|(i, channel)| {
-            let mut label = format!("# {}", channel.name);
+            // Surfaces more of the channel metadata the server already
+            // sends but this list never showed: a star for favorites, a
+            // lock for private channels, and — alongside the existing
+            // unread count — a mention count, plus the channel's own color.
+            let mut label = String::new();
+            if channel.is_favorite {
+                label.push_str("★ ");
+            }
+            label.push_str(if channel.is_private { "🔒 " } else { "# " });
+            label.push_str(&channel.name);
             if channel.unread_count > 0 {
                 label.push_str(&format!(" ({})", channel.unread_count));
             }
-            let style = if i == state.selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
+            if channel.mention_count > 0 {
+                label.push_str(&format!(" @{}", channel.mention_count));
+            }
+            let color = channel
+                .color
+                .as_deref()
+                .and_then(parse_hex_color)
+                .unwrap_or(Color::Reset);
+            let mut style = Style::default().fg(color);
+            if i == state.selected {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
             ListItem::new(label).style(style)
         })
         .collect();
@@ -710,6 +810,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wrapped_row_count_counts_wrapped_rows_not_logical_lines() {
+        // Regression test for a real bug in the Info pane (#50 follow-up):
+        // sizing it by info_lines.len() alone clipped "Role: owner" off the
+        // bottom whenever the flags line ("Private · ★ Favorite ·
+        // Archived") wrapped onto two rows at the sidebar's actual width.
+        let lines = vec![
+            Line::from("short"),
+            Line::from("this-line-is-wider-than-ten"),
+        ];
+        assert_eq!(wrapped_row_count(&lines, 10), 1 + 3);
+    }
+
     // Full-render checks against a synthetic (never real-account) fixture —
     // this is what actually caught that overflowing history was clipping
     // the newest messages off the bottom with no way to scroll to them.
@@ -738,6 +851,9 @@ mod tests {
             is_archived: false,
             is_favorite: false,
             unread_count: 0,
+            color: None,
+            my_role: "owner".to_string(),
+            mention_count: 0,
         }];
         let Some(Command::LoadMessages { seq, .. }) = state.on_channels_loaded(Ok(channels)) else {
             panic!("expected the initial channel load to request messages");
@@ -974,6 +1090,55 @@ mod tests {
     }
 
     #[test]
+    fn the_channel_list_shows_favorite_private_and_mention_markers() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            let channel = &mut logged_in.channels.as_mut().unwrap()[0];
+            channel.is_favorite = true;
+            channel.is_private = true;
+            channel.mention_count = 2;
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains('★'), "favorite marker missing:\n{content}");
+        assert!(content.contains('🔒'), "private marker missing:\n{content}");
+        assert!(content.contains("@2"), "mention count missing:\n{content}");
+    }
+
+    #[test]
+    fn the_info_pane_shows_description_flags_and_role() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            let channel = &mut logged_in.channels.as_mut().unwrap()[0];
+            channel.description = Some("A test channel".to_string());
+            channel.is_private = true;
+            channel.is_favorite = true;
+            channel.is_archived = true;
+            channel.my_role = "owner".to_string();
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("A test channel"));
+        assert!(content.contains("Private"));
+        assert!(content.contains("Favorite"));
+        assert!(content.contains("Archived"));
+        assert!(content.contains("Role: owner"));
+    }
+
+    #[test]
+    fn parse_hex_color_handles_valid_and_invalid_input() {
+        assert_eq!(
+            parse_hex_color("#3b82f6"),
+            Some(Color::Rgb(0x3b, 0x82, 0xf6))
+        );
+        assert_eq!(parse_hex_color("3b82f6"), None, "missing leading '#'");
+        assert_eq!(parse_hex_color("#zzzzzz"), None, "not valid hex digits");
+        assert_eq!(parse_hex_color("#abc"), None, "wrong length");
+    }
+
+    #[test]
     fn below_the_minimum_size_shows_a_resize_message_instead_of_the_ui() {
         let state = logged_in_state_with_messages(5);
         let content = render_to_text(&state, MIN_WIDTH - 1, MIN_HEIGHT);
@@ -1134,6 +1299,9 @@ mod tests {
             is_archived: false,
             is_favorite: false,
             unread_count: 0,
+            color: None,
+            my_role: "owner".to_string(),
+            mention_count: 0,
         }];
         let Some(Command::LoadMessages { seq, .. }) = state.on_channels_loaded(Ok(channels)) else {
             panic!("expected the initial channel load to request messages");

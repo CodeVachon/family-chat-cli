@@ -31,6 +31,9 @@ pub struct Channel {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    /// Hex color (e.g. `"#3b82f6"`), null for some channels — the server's
+    /// per-channel color, shown as the channel name's own color in the list.
+    pub color: Option<String>,
     #[serde(rename = "isPrivate")]
     pub is_private: bool,
     #[serde(rename = "isArchived")]
@@ -39,6 +42,13 @@ pub struct Channel {
     pub is_favorite: bool,
     #[serde(rename = "unreadCount")]
     pub unread_count: i64,
+    /// `owner|admin|user|viewer` (see docs/api-contract.md). `#[serde(default)]`
+    /// so a payload that predates this field (or a hand-written test mock)
+    /// still parses — an empty string just renders as "no role known".
+    #[serde(rename = "myRole", default)]
+    pub my_role: String,
+    #[serde(rename = "mentionCount", default)]
+    pub mention_count: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
