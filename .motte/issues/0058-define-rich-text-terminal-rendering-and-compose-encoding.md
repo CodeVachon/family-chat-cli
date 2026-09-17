@@ -6,7 +6,7 @@ parent: 5
 assignee: Christopher Vachon
 labels: [task, tui, chat, mvp]
 created: 2026-08-26T01:33:09Z
-updated: 2026-09-17T00:10:14Z
+updated: 2026-09-17T14:30:33Z
 ---
 
 ## Description
@@ -34,3 +34,17 @@ Per-author message color (stable hash of author.id, small readable palette) make
 Images/videos: no inline rendering (sixel/kitty graphics support is inconsistent across terminals, and video can never render inline regardless) — each attachment gets its own line: [image|video|pdf|file], filename, dimensions when known, and the raw secure_url as plain visible text (not an OSC-8 hyperlink — several modern terminals auto-linkify bare URLs on their own, and embedding raw escape sequences in a ratatui cell isn't safe per the point above). Modeled the previously-unmodeled Attachment/attachments fields on Message to support this.
 
 Verified: 12 new text::html unit tests (bold/br/links/mentions/lists/blockquote/control-characters/malformed-input), 2 tui::widgets tests already covering scroll now exercise the styled-Line path too, plus a new #[ignore]'d visual_preview_of_rich_rendering test (run via 'cargo test visual_preview -- --ignored --nocapture') that renders a synthetic message set covering every formatting kind to the real terminal for eyeballing — used it live in a tmux pty and visually confirmed bold/italic/link/code/mention/list/blockquote/attachment rendering and per-author colors all look right. 44 tests passing, clippy/fmt clean.
+
+### 2026-09-17T14:30:33Z — Christopher Vachon (user)
+
+Follow-up polish after closing this out:
+
+Message timestamps now render in the local system timezone (message.created_at.with_timezone(&Local)) instead of raw UTC — data storage and pagination cursors are unaffected, only the [HH:MM] display changed.
+
+Added a YYYY-MM-DD date-divider line (also local timezone) inserted wherever the calendar date changes between consecutive messages, rather than repeating the date on every line — requested after Chris noted channels can span weeks and a bare HH:MM gives no day context. Unit tested (a_date_divider_appears_once_per_calendar_day_not_per_message).
+
+Channel system events (kind == "system", e.g. joins/leaves) previously rendered as an empty body after the [HH:MM] Author: prefix, since their content lives in a systemEvent object, not body. Now rendered as "joined the channel", "was added to the channel", "left the channel", or "was removed from the channel" depending on systemEvent.event and whether the actor and subject match (the message's author is the event's subject, not its actor, so a self-join reads naturally and an add-by-someone-else doesn't misattribute the action to the wrong person).
+
+Along the way, found that SystemEvent.subject_user_id had been modeled as required, but a real channel_updated (rename) event has no subject at all — only join/leave do. That silently broke decoding of every message in any channel with a rename in its history (reproduced live against "Christopher & Louise", which has exactly one). Made it Option<String> and added a deserialization regression test (a_system_event_without_a_subject_still_deserializes) so an unmodeled systemEvent shape can't take down a whole channel's message list again.
+
+54→55 tests passing across these changes, clippy/fmt clean throughout.

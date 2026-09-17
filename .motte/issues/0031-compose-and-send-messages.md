@@ -7,7 +7,7 @@ assignee: Christopher Vachon
 labels: [task, chat]
 blockedBy: [22, 30]
 created: 2026-08-25T21:38:35Z
-updated: 2026-09-16T23:35:06Z
+updated: 2026-09-17T14:30:40Z
 ---
 
 ## Description
@@ -27,3 +27,9 @@ Implemented: TUI composer (Tab toggles focus between the channel list and a comp
 ### 2026-09-16T23:35:06Z — Christopher Vachon (user)
 
 Confirmed live 2026-09-16: Chris verified sending a real message from the TUI works end to end now that family-chat's postMessageSchema.omit() bug (see #48's note) is fixed and redeployed.
+
+### 2026-09-17T14:30:40Z — Christopher Vachon (user)
+
+Fixed a real regression in the send-then-reload reconciliation this ticket's prior note described: on a successful send, on_message_sent cleared the channel's cached messages before refetching, and the message pane's "Loading messages…" placeholder replaced the whole list whenever a reload was in flight — even though request_messages always refetches regardless of what's cached. Together these blanked and redrew the entire channel on every single send, which Chris reported as the whole pane "flashing".
+
+Fixed by no longer clearing the cache before the refetch (unnecessary — the reload always happens anyway) and gating the loading placeholder on there being no cached messages yet for the selected channel, so a post-send reload (or a channel switch, or a realtime resync) now updates the pane quietly once the fresh page arrives instead of blanking it first. Regression test added (a_successful_send_keeps_showing_cached_messages_during_the_reload). Verified live by sending a real message and watching it appear without the rest of the channel's history disappearing first.

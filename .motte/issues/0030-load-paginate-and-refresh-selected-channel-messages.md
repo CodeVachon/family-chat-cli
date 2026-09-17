@@ -7,7 +7,7 @@ assignee: Christopher Vachon
 labels: [task, chat]
 blockedBy: [22, 29]
 created: 2026-08-25T21:38:35Z
-updated: 2026-09-17T12:53:07Z
+updated: 2026-09-17T14:30:23Z
 ---
 
 ## Description
@@ -33,3 +33,11 @@ Pagination itself (the part actually asked for) is also now implemented: Message
 Also handled a documented edge case: the server's cursor is exclusive on a millisecond boundary and can hand back a row already cached (see docs/api-contract.md's own note on this) — the merge now dedupes by message id before combining pages, with a test reproducing exactly that overlap.
 
 Verified: 6 new app::state unit tests (trigger threshold, duplicate-request guard, has_more gating, prepend ordering + scroll preservation, dedup on overlap) plus the existing wiremock cursor test (#43's note). Not covered: automatic retry/backoff on a failed page load (same gap #51 already noted, still open — a failed load still just shows a status error).
+
+### 2026-09-17T14:30:23Z — Christopher Vachon (user)
+
+Reopened investigation after Chris reported the identical symptom again post-fix (last message from Sep 13, server had through Sep 16) — the load_selected fix from the prior note didn't resolve it, because the actual bug was elsewhere.
+
+Direct log inspection plus a live curl comparison against the server (via the stored session token) proved the fetch itself was always correct and current for every channel — this was never a data-staleness or pagination bug at all, in either report. The real cause: tui::widgets::windowed() decided how many message-history lines fit the pane by counting each logical Line as exactly one rendered row, ignoring that a long attachment URL wraps across multiple terminal rows. That undercounted the space wrapped lines actually need, so Paragraph silently clipped the genuinely newest messages off the bottom of the pane — with zero error or visual indication. It looked exactly like stale/paginated data, twice.
+
+Fixed by having windowed() count each line's actual wrapped row count (Line::width().div_ceil(pane_width)) when reserving space for the visible window, instead of one row per line. Added a regression test (a_wide_line_reserves_its_actual_wrapped_row_count) and INFO-level logging of load results/realtime events (src/tui/mod.rs) that was essential to isolate this from the data layer. Verified live against "The Vachons" (the channel with 3 image attachments and long Cloudinary URLs that originally exhibited the clipping) — now shows through the server's actual newest message.
