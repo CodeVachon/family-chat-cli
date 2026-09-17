@@ -30,4 +30,13 @@ wiremock = "0.6"
 tempfile = "3"
 
 [profile.release]
+# Single-crate binary distributed to a handful of people, not a library —
+# maximum optimization at the cost of a slower release build is the right
+# tradeoff, and there's no reason to keep debug symbols in the shipped
+# binary. Deliberately not `panic = "abort"`: background tokio tasks (a
+# message load, the SSE stream) already isolate a panic to just that task,
+# and aborting the whole process on any of them would trade a recoverable
+# failure for an unrecoverable one.
 lto = true
+codegen-units = 1
+strip = true

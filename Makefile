@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check clippy test build run preflight
+.PHONY: fmt fmt-check clippy test build release run preflight
 
 fmt:
 	cargo fmt
@@ -14,6 +14,11 @@ test:
 
 build:
 	cargo build
+
+# Slower to build (LTO + a single codegen unit — see Cargo.toml) but a
+# smaller, faster binary; use this for the copy you actually install (#40).
+release:
+	cargo build --release
 
 run:
 	cargo run
