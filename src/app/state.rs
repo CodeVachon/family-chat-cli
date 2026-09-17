@@ -504,8 +504,12 @@ impl AppState {
                 // locally: the send response doesn't carry the decorated
                 // shape (author/reactions/mentions) GET returns, and a
                 // refetch is simple and correct without SSE to reconcile
-                // against yet (see #57).
-                state.messages.remove(&channel_id);
+                // against yet (see #57). Deliberately *not* clearing the
+                // cached messages first — `request_messages` always
+                // refetches regardless, and clearing here just blanked the
+                // whole pane for the round trip, flashing the entire
+                // channel on every send instead of updating quietly once
+                // the fresh page arrives.
                 Some(state.request_messages(channel_id))
             }
             Err(error) => {
@@ -710,6 +714,44 @@ mod tests {
         assert_eq!(logged_in.compose, "");
         assert!(
             matches!(command, Some(Command::LoadMessages { channel_id, .. }) if channel_id == "c1")
+        );
+    }
+
+    #[test]
+    fn a_successful_send_keeps_showing_cached_messages_during_the_reload() {
+        // A send used to clear the channel's cached messages up front, which
+        // blanked the whole pane until the refetch resolved — the "flash"
+        // this test guards against. The cache should stay put; only the
+        // fresh page (once `on_messages_loaded` delivers it) replaces it.
+        let mut state = logged_in_with_channels(["General"]);
+        let existing = Message {
+            id: "m1".to_string(),
+            kind: "user".to_string(),
+            system_event: None,
+            body: "<p>already here</p>".to_string(),
+            created_at: Utc::now(),
+            deleted_at: None,
+            author: MessageAuthor {
+                id: "u1".to_string(),
+                name: "Chris".to_string(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+        };
+        state.on_messages_loaded("c1".to_string(), 1, Ok((vec![existing], false)));
+
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('h')));
+        state.on_key(key(KeyCode::Enter));
+        state.on_message_sent("c1".to_string(), Ok(()));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(
+            logged_in.messages.get("c1").map(Vec::len),
+            Some(1),
+            "the cached message should still be there while the reload is in flight"
         );
     }
 

@@ -183,15 +183,20 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         .selected_channel()
         .map(|c| format!("# {}", c.name))
         .unwrap_or_else(|| "family-chat".to_string());
+    let cached_messages = state
+        .selected_channel()
+        .and_then(|c| state.messages.get(&c.id));
     let body: Vec<Line> = if channels.is_empty() {
         vec![Line::from("No channels yet.")]
-    } else if state.loading_messages {
+    } else if state.loading_messages && cached_messages.is_none() {
+        // Only show the loading placeholder when there's nothing cached yet
+        // for this channel — a reload after sending, switching back to an
+        // already-seen channel, or a realtime resync should update the pane
+        // quietly once the fresh page arrives, not blank out messages that
+        // are still perfectly valid to keep showing meanwhile.
         vec![Line::from("Loading messages…")]
     } else {
-        match state
-            .selected_channel()
-            .and_then(|c| state.messages.get(&c.id))
-        {
+        match cached_messages {
             Some(messages) if messages.is_empty() => vec![Line::from("No messages yet.")],
             Some(messages) => {
                 let all_lines = messages_to_lines(messages);
