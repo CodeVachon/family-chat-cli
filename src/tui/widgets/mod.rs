@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
-use crate::api::types::{Attachment, Message, MessageAuthor};
+use crate::api::types::{Attachment, Channel, Message, MessageAuthor};
 use crate::app::AppState;
 use crate::app::state::{LoggedInFocus, LoggedInState, LoginField, LoginForm, Screen};
 use crate::text::html;
@@ -152,42 +152,71 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         .areas(layout.main);
 
     let channels = state.channels.as_deref().unwrap_or(&[]);
-    let items: Vec<ListItem> = channels
-        .iter()
-        .enumerate()
-        .map(|(i, channel)| {
-            let mut label = format!("# {}", channel.name);
-            if channel.unread_count > 0 {
-                label.push_str(&format!(" ({})", channel.unread_count));
-            }
-            let style = if i == state.selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            ListItem::new(label).style(style)
-        })
-        .collect();
     let sidebar_style = focus_style(state.focus == LoggedInFocus::Channels);
-    frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Channels")
-                .style(sidebar_style),
-        ),
-        layout.sidebar,
-    );
+    // A load failure is pane-local (#26): shown inside the channels pane
+    // itself, not a shared status line with no indication of which request
+    // failed. Only *replaces* the list when there's nothing cached yet —
+    // a background reload (resync, manual refresh) failing must never blank
+    // an already-loaded channel list, just like the anti-flash fix for the
+    // message pane. When channels are still showing, the title gets a short,
+    // fixed marker instead of the full (unbounded-length) error text — the
+    // sidebar's width is a fixed 28 columns (see layout::split), too narrow
+    // for most error messages, and a title can't wrap the way pane content
+    // can. The full message is still in the log file (see tui::log_if_err).
+    let sidebar_title = match &state.channels_error {
+        Some(_) if !channels.is_empty() => "Channels — error".to_string(),
+        _ => "Channels".to_string(),
+    };
+    if let Some(error) = &state.channels_error {
+        if channels.is_empty() {
+            frame.render_widget(
+                Paragraph::new(error.as_str())
+                    .style(Style::default().fg(Color::Red))
+                    .wrap(Wrap { trim: false })
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(sidebar_title)
+                            .style(sidebar_style),
+                    ),
+                layout.sidebar,
+            );
+        } else {
+            render_channel_list(frame, layout.sidebar, state, channels, sidebar_title);
+        }
+    } else {
+        render_channel_list(frame, layout.sidebar, state, channels, sidebar_title);
+    }
 
-    let title = state
+    let selected_channel_title = state
         .selected_channel()
         .map(|c| format!("# {}", c.name))
         .unwrap_or_else(|| "family-chat".to_string());
     let cached_messages = state
         .selected_channel()
         .and_then(|c| state.messages.get(&c.id));
+    // Same pane-local principle as the channels error above: only replace
+    // the message pane's content with the error when there's nothing cached
+    // to fall back on; otherwise note it with a short, fixed title marker
+    // (same width reasoning as the channels pane) and keep showing what was
+    // already loaded.
+    let messages_title = match &state.messages_error {
+        Some(_) if cached_messages.is_some() => {
+            format!("{selected_channel_title} — error")
+        }
+        _ => selected_channel_title,
+    };
     let body: Vec<Line> = if channels.is_empty() {
         vec![Line::from("No channels yet.")]
+    } else if let Some(error) = &state.messages_error {
+        if cached_messages.is_none() {
+            vec![Line::styled(
+                error.as_str().to_string(),
+                Style::default().fg(Color::Red),
+            )]
+        } else {
+            windowed_messages(cached_messages, messages_area, state.message_scroll)
+        }
     } else if state.loading_messages && cached_messages.is_none() {
         // Only show the loading placeholder when there's nothing cached yet
         // for this channel — a reload after sending, switching back to an
@@ -198,35 +227,26 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     } else {
         match cached_messages {
             Some(messages) if messages.is_empty() => vec![Line::from("No messages yet.")],
-            Some(messages) => {
-                let all_lines = messages_to_lines(messages);
-                // Window to the pane's visible height, anchored to the
-                // bottom (latest) minus however far `message_scroll` has
-                // paged up — otherwise a channel with more history than
-                // fits would just clip the newest messages off the bottom
-                // with no way to see them.
-                windowed(
-                    all_lines,
-                    visible_cols(messages_area),
-                    visible_rows(messages_area),
-                    state.message_scroll,
-                )
-            }
+            Some(_) => windowed_messages(cached_messages, messages_area, state.message_scroll),
             None => vec![],
         }
     };
     frame.render_widget(
         Paragraph::new(Text::from(body))
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(Block::default().borders(Borders::ALL).title(messages_title))
             .wrap(Wrap { trim: false }),
         messages_area,
     );
 
     let compose_focused = state.focus == LoggedInFocus::Compose;
-    let compose_title = if state.sending {
-        "Sending…"
-    } else {
-        "Message"
+    // Same short-marker-in-the-title reasoning as the channels/messages
+    // panes above — the compose box is only 1 line tall inside its border,
+    // with no room to wrap a full error message. The draft itself is never
+    // lost (see #31), and the full message is in the log file.
+    let compose_title = match (&state.send_error, state.sending) {
+        (Some(_), _) => "Message — send failed".to_string(),
+        (None, true) => "Sending…".to_string(),
+        (None, false) => "Message".to_string(),
     };
     frame.render_widget(
         Paragraph::new(state.compose.as_str()).block(
@@ -245,13 +265,11 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         frame.set_cursor_position((cursor_x, compose_area.y + 1));
     }
 
-    let status = state.status.clone().unwrap_or_else(|| {
-        format!(
-            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · Enter send · r refresh · l logout · q quit",
-            state.user.name
-        )
-    });
-    frame.render_widget(Paragraph::new(status), layout.status);
+    let hint = format!(
+        "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · Enter send · r refresh · l logout · q quit",
+        state.user.name
+    );
+    frame.render_widget(Paragraph::new(hint), layout.status);
 }
 
 /// A bordered pane's inner content height.
@@ -299,6 +317,64 @@ fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize
     }
 
     lines[start..end].to_vec()
+}
+
+/// `messages`, rendered and windowed to fit `area` at the given scroll
+/// offset — the shared tail end of both the normal path and the
+/// error-with-cached-content path in `logged_in_view` (see `windowed`'s doc
+/// comment for why wrapped row count, not line count, matters here).
+fn windowed_messages(
+    messages: Option<&Vec<Message>>,
+    area: Rect,
+    scroll: usize,
+) -> Vec<Line<'static>> {
+    let Some(messages) = messages else {
+        return vec![];
+    };
+    windowed(
+        messages_to_lines(messages),
+        visible_cols(area),
+        visible_rows(area),
+        scroll,
+    )
+}
+
+/// The channel list, rendered as-is — split out so the channels pane can
+/// still show a previously-loaded list even when a later background reload
+/// fails (see `logged_in_view`'s `channels_error` handling).
+fn render_channel_list(
+    frame: &mut Frame,
+    area: Rect,
+    state: &LoggedInState,
+    channels: &[Channel],
+    title: String,
+) {
+    let items: Vec<ListItem> = channels
+        .iter()
+        .enumerate()
+        .map(|(i, channel)| {
+            let mut label = format!("# {}", channel.name);
+            if channel.unread_count > 0 {
+                label.push_str(&format!(" ({})", channel.unread_count));
+            }
+            let style = if i == state.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            ListItem::new(label).style(style)
+        })
+        .collect();
+    let sidebar_style = focus_style(state.focus == LoggedInFocus::Channels);
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(sidebar_style),
+        ),
+        area,
+    );
 }
 
 /// All of a channel's messages, with a `YYYY-MM-DD` divider inserted (in the
@@ -586,6 +662,13 @@ mod tests {
         state
     }
 
+    fn logged_in_state_mut(state: &mut AppState) -> &mut LoggedInState {
+        match &mut state.screen {
+            Screen::LoggedIn(logged_in) => logged_in,
+            _ => panic!("expected LoggedIn"),
+        }
+    }
+
     fn render_to_text(state: &AppState, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         // `draw()`'s return value carries the buffer that was just rendered
@@ -628,6 +711,118 @@ mod tests {
         assert!(
             content.contains("msg-0"),
             "scrolling up should reveal the oldest message:\n{content}"
+        );
+    }
+
+    // Pane-local errors (#26) — a load/send failure must show up inside the
+    // pane it actually belongs to, and the shared bottom line must always
+    // keep showing the key-hints text, never absorb an error itself.
+
+    #[test]
+    fn a_channels_error_with_nothing_cached_replaces_the_channel_list() {
+        let mut state = logged_in_state_with_messages(1);
+        logged_in_state_mut(&mut state).channels = None;
+        logged_in_state_mut(&mut state).channels_error =
+            Some("Couldn't load channels: offline".to_string());
+
+        // Checked as two separate substrings, not one contiguous phrase —
+        // the error wraps onto its own line inside the narrow sidebar, so
+        // the rendered text has a newline where the source string had a
+        // space.
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("Couldn't load channels"),
+            "the channels error should render inside the channels pane:\n{content}"
+        );
+        assert!(content.contains("offline"));
+    }
+
+    #[test]
+    fn a_channels_error_with_a_cached_list_keeps_showing_the_list() {
+        let mut state = logged_in_state_with_messages(1);
+        logged_in_state_mut(&mut state).channels_error =
+            Some("Couldn't load channels: offline".to_string());
+
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("General"),
+            "a background refresh failure must not blank an already-loaded channel list:\n{content}"
+        );
+        assert!(
+            content.contains("Channels — error"),
+            "the pane's title should note the failure (short marker — the \
+             sidebar is too narrow to fit an arbitrary-length message):\n{content}"
+        );
+    }
+
+    #[test]
+    fn a_messages_error_with_nothing_cached_replaces_the_message_pane() {
+        let mut state = logged_in_state_with_messages(0);
+        logged_in_state_mut(&mut state).messages.remove("c1");
+        logged_in_state_mut(&mut state).messages_error =
+            Some("Couldn't load messages: offline".to_string());
+
+        // Same wrap-safe check as the channels-pane test above.
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("Couldn't load messages"),
+            "the messages error should render inside the messages pane:\n{content}"
+        );
+        assert!(content.contains("offline"));
+    }
+
+    #[test]
+    fn a_messages_error_with_cached_messages_keeps_showing_them() {
+        let mut state = logged_in_state_with_messages(3);
+        logged_in_state_mut(&mut state).messages_error =
+            Some("Couldn't load older messages: offline".to_string());
+
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("msg-2"),
+            "a failed background/older-page load must not blank already-loaded messages:\n{content}"
+        );
+        assert!(
+            content.contains("— error"),
+            "the pane's title should note the failure (short marker — a \
+             channel name plus an arbitrary-length error won't reliably fit):\n{content}"
+        );
+    }
+
+    #[test]
+    fn a_send_error_shows_in_the_compose_title_and_keeps_the_draft() {
+        let mut state = logged_in_state_with_messages(0);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.compose = "hello".to_string();
+            logged_in.send_error = Some("Couldn't send message: offline".to_string());
+        }
+
+        let content = render_to_text(&state, 60, 10);
+        assert!(
+            content.contains("hello"),
+            "a failed send must never lose the draft:\n{content}"
+        );
+        assert!(
+            content.contains("send failed"),
+            "the compose box's title should note the failure:\n{content}"
+        );
+    }
+
+    #[test]
+    fn the_bottom_line_always_shows_the_hints_never_an_error() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.channels_error = Some("channels boom".to_string());
+            logged_in.messages_error = Some("messages boom".to_string());
+            logged_in.send_error = Some("send boom".to_string());
+        }
+
+        let content = render_to_text(&state, 60, 12);
+        assert!(
+            content.contains("Tab switch focus"),
+            "the shared bottom line should still show the key hints:\n{content}"
         );
     }
 

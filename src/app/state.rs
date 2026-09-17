@@ -46,7 +46,12 @@ pub struct LoggedInState {
     pub selected: usize,
     pub messages: HashMap<String, Vec<Message>>,
     pub loading_messages: bool,
-    pub status: Option<String>,
+    /// Pane-local errors (#26) — shown inside whichever pane the failure
+    /// actually belongs to, rather than one shared status line that gave no
+    /// indication of which request had failed.
+    pub channels_error: Option<String>,
+    pub messages_error: Option<String>,
+    pub send_error: Option<String>,
     pub focus: LoggedInFocus,
     pub compose: String,
     pub sending: bool,
@@ -81,7 +86,9 @@ impl LoggedInState {
             selected: 0,
             messages: HashMap::new(),
             loading_messages: false,
-            status: None,
+            channels_error: None,
+            messages_error: None,
+            send_error: None,
             focus: LoggedInFocus::Channels,
             compose: String::new(),
             sending: false,
@@ -278,10 +285,12 @@ impl AppState {
         match key.code {
             KeyCode::Char(c) => {
                 state.compose.push(c);
+                state.send_error = None;
                 None
             }
             KeyCode::Backspace => {
                 state.compose.pop();
+                state.send_error = None;
                 None
             }
             KeyCode::Enter => {
@@ -393,13 +402,14 @@ impl AppState {
                 // to the first channel — this reload also fires on a live
                 // `channels.changed`/`resync` event while the user is reading
                 // something else.
+                state.channels_error = None;
                 state.selected = state.selected.min(channels.len().saturating_sub(1));
                 state.channels = Some(channels);
                 let channel_id = state.selected_channel().map(|channel| channel.id.clone());
                 channel_id.map(|id| state.request_messages(id))
             }
             Err(error) => {
-                state.status = Some(format!("Couldn't load channels: {error}"));
+                state.channels_error = Some(format!("Couldn't load channels: {error}"));
                 None
             }
         }
@@ -429,12 +439,13 @@ impl AppState {
         state.loading_messages = false;
         match result {
             Ok((messages, has_more)) => {
+                state.messages_error = None;
                 state.has_more.insert(channel_id.clone(), has_more);
                 state.messages.insert(channel_id, messages);
                 state.message_scroll = 0;
             }
             Err(error) => {
-                state.status = Some(format!("Couldn't load messages: {error}"));
+                state.messages_error = Some(format!("Couldn't load messages: {error}"));
             }
         }
     }
@@ -455,6 +466,7 @@ impl AppState {
         state.loading_older.remove(&channel_id);
         match result {
             Ok((mut older, has_more)) => {
+                state.messages_error = None;
                 state.has_more.insert(channel_id.clone(), has_more);
                 if older.is_empty() {
                     return;
@@ -483,7 +495,7 @@ impl AppState {
                 }
             }
             Err(error) => {
-                state.status = Some(format!("Couldn't load older messages: {error}"));
+                state.messages_error = Some(format!("Couldn't load older messages: {error}"));
             }
         }
     }
@@ -500,6 +512,7 @@ impl AppState {
         match result {
             Ok(()) => {
                 state.compose.clear();
+                state.send_error = None;
                 // Force a reload rather than splicing the new message in
                 // locally: the send response doesn't carry the decorated
                 // shape (author/reactions/mentions) GET returns, and a
@@ -513,7 +526,7 @@ impl AppState {
                 Some(state.request_messages(channel_id))
             }
             Err(error) => {
-                state.status = Some(format!("Couldn't send message: {error}"));
+                state.send_error = Some(format!("Couldn't send message: {error}"));
                 None
             }
         }
@@ -859,7 +872,7 @@ mod tests {
             panic!("expected LoggedIn");
         };
         assert!(
-            logged_in.status.is_none(),
+            logged_in.messages_error.is_none(),
             "the stale error must not surface"
         );
         assert!(logged_in.messages.get("c1").is_some_and(Vec::is_empty));
