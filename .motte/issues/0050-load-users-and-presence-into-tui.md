@@ -6,7 +6,7 @@ parent: 6
 labels: [task, chat, mvp]
 blockedBy: [21, 27, 29]
 created: 2026-08-25T21:45:44Z
-updated: 2026-09-17T17:08:36Z
+updated: 2026-09-17T17:20:23Z
 ---
 
 ## Description
@@ -34,3 +34,7 @@ Re-derived the minimum terminal-size floor from #28 (50x12 → 80x12): the old f
 Verified live against the real account: "Christopher & Louise" (2 members) shows both online, matching a live presence.snapshot with exactly those two ids; "The Vachons" (4 members) correctly shows a mix of online (Louise, Christopher) and unknown/offline (Martin Vachon, Rachel). No new errors in the log from this verification run.
 
 98 tests passing (6 new), clippy/fmt clean.
+
+### 2026-09-17T17:20:23Z — Christopher Vachon (user)
+
+Follow-up layout tweak: moved the users pane from its own fixed-width third column into the sidebar, stacked below the channel list, after Chris pointed out the channel list (usually short) left a lot of dead space in its own column while users had a separate narrow column squeezing the main messages pane. The sidebar now splits vertically — channels sized to content (channel count + border), users given whatever's left. Re-derived the min-size floor back down to 50x12 (from 80x12) now that the users pane costs sidebar height instead of a whole extra main-pane-width column. Also fixed a sizing bug this exposed: content-sizing the channels pane to a zero channel count also applied when showing a channels-load error with nothing cached, squeezing that error message down to unreadable. Verified live: all 7 real channels show with users immediately below, no gap; messages pane back to full width. 98 tests passing, clippy/fmt clean.
