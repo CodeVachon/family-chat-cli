@@ -269,16 +269,28 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     let cached_messages = state
         .selected_channel()
         .and_then(|c| state.messages.get(&c.id));
+    // The filtered set to actually render (#32) — every cached message when
+    // there's no active search query. Kept separate from `cached_messages`
+    // (which still reflects the *raw* cache) because "no messages at all"
+    // and "the filter matched nothing" need different pane text below.
+    let visible_messages = state.visible_messages();
     // Same pane-local principle as the channels error above: only replace
     // the message pane's content with the error when there's nothing cached
     // to fall back on; otherwise note it with a short, fixed title marker
     // (same width reasoning as the channels pane) and keep showing what was
     // already loaded.
-    let messages_title = match &state.messages_error {
-        Some(_) if cached_messages.is_some() => {
-            format!("{selected_channel_title} — error")
+    let messages_title = {
+        let base = match &state.messages_error {
+            Some(_) if cached_messages.is_some() => {
+                format!("{selected_channel_title} — error")
+            }
+            _ => selected_channel_title,
+        };
+        if state.search_query.is_empty() {
+            base
+        } else {
+            format!("{base} — /{}", state.search_query)
         }
-        _ => selected_channel_title,
     };
     let body: Vec<Line> = if channels.is_empty() {
         vec![Line::from("No channels yet.")]
@@ -289,7 +301,11 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
                 Style::default().fg(Color::Red),
             )]
         } else {
-            windowed_messages(cached_messages, messages_area, state.message_scroll)
+            windowed_messages(
+                visible_messages.as_deref(),
+                messages_area,
+                state.message_scroll,
+            )
         }
     } else if state.loading_messages && cached_messages.is_none() {
         // Only show the loading placeholder when there's nothing cached yet
@@ -299,10 +315,18 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         // are still perfectly valid to keep showing meanwhile.
         vec![Line::from("Loading messages…")]
     } else {
-        match cached_messages {
-            Some(messages) if messages.is_empty() => vec![Line::from("No messages yet.")],
-            Some(_) => windowed_messages(cached_messages, messages_area, state.message_scroll),
-            None => vec![],
+        match (cached_messages, visible_messages.as_deref()) {
+            (Some(raw), _) if raw.is_empty() => vec![Line::from("No messages yet.")],
+            (Some(_), Some([])) => vec![Line::from(format!(
+                "No messages match \"{}\".",
+                state.search_query
+            ))],
+            (Some(_), Some(_)) => windowed_messages(
+                visible_messages.as_deref(),
+                messages_area,
+                state.message_scroll,
+            ),
+            _ => vec![],
         }
     };
     frame.render_widget(
@@ -339,11 +363,25 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         frame.set_cursor_position((cursor_x, compose_area.y + 1));
     }
 
-    let hint = format!(
-        "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · Enter send · r refresh · l logout · q quit",
-        state.user.name
-    );
+    // While actively typing a search query (#32), the status line becomes
+    // the input box itself (like a pager's `/search`) rather than showing
+    // the usual hints — there's nowhere else in this layout with room for
+    // a dedicated search box, and the hints aren't useful mid-search anyway.
+    let searching = state.focus == LoggedInFocus::Search;
+    let hint = if searching {
+        format!("/{}", state.search_query)
+    } else {
+        format!(
+            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · / search · Enter send · r refresh · l logout · q quit",
+            state.user.name
+        )
+    };
     frame.render_widget(Paragraph::new(hint), layout.status);
+    if searching {
+        let cursor_x = (layout.status.x + 1 + state.search_query.chars().count() as u16)
+            .min(layout.status.x + layout.status.width.saturating_sub(1));
+        frame.set_cursor_position((cursor_x, layout.status.y));
+    }
 }
 
 /// The selected channel's metadata not otherwise shown anywhere: its
@@ -494,7 +532,7 @@ fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize
 /// error-with-cached-content path in `logged_in_view` (see `windowed`'s doc
 /// comment for why wrapped row count, not line count, matters here).
 fn windowed_messages(
-    messages: Option<&Vec<Message>>,
+    messages: Option<&[&Message]>,
     area: Rect,
     scroll: usize,
 ) -> Vec<Line<'static>> {
@@ -580,7 +618,7 @@ fn render_channel_list(
 /// All of a channel's messages, with a `YYYY-MM-DD` divider inserted (in the
 /// local timezone) wherever the calendar date changes — messages here can
 /// span weeks, and a bare `HH:MM` gives no way to tell which day is which.
-fn messages_to_lines(messages: &[Message]) -> Vec<Line<'static>> {
+fn messages_to_lines(messages: &[&Message]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut last_date: Option<NaiveDate> = None;
 
@@ -1090,6 +1128,48 @@ mod tests {
     }
 
     #[test]
+    fn a_search_query_filters_the_messages_pane_to_matches_only() {
+        let mut state = logged_in_state_with_messages(5);
+        logged_in_state_mut(&mut state).search_query = "msg-3".to_string();
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(
+            content.contains("msg-3"),
+            "match should still show:\n{content}"
+        );
+        assert!(
+            !content.contains("msg-2") && !content.contains("msg-4"),
+            "non-matching messages should be filtered out:\n{content}"
+        );
+    }
+
+    #[test]
+    fn a_query_matching_nothing_shows_a_clear_no_match_message() {
+        let mut state = logged_in_state_with_messages(5);
+        logged_in_state_mut(&mut state).search_query = "no such thing".to_string();
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("No messages match"));
+    }
+
+    #[test]
+    fn the_status_line_becomes_the_search_box_while_typing() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.focus = LoggedInFocus::Search;
+            logged_in.search_query = "hello".to_string();
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("/hello"));
+        assert!(
+            !content.contains("Tab switch focus"),
+            "the usual hints should be replaced while actively searching:\n{content}"
+        );
+    }
+
+    #[test]
     fn the_channel_list_shows_favorite_private_and_mention_markers() {
         let mut state = logged_in_state_with_messages(1);
         {
@@ -1227,7 +1307,8 @@ mod tests {
         };
         let day1 = Utc.with_ymd_and_hms(2026, 9, 14, 10, 0, 0).unwrap();
         let day2 = Utc.with_ymd_and_hms(2026, 9, 16, 10, 0, 0).unwrap();
-        let messages = vec![make("a", day1), make("b", day1), make("c", day2)];
+        let messages = [make("a", day1), make("b", day1), make("c", day2)];
+        let messages: Vec<&Message> = messages.iter().collect();
 
         let lines = messages_to_lines(&messages);
         let divider_count = lines

@@ -36,6 +36,9 @@ impl LoginForm {
 pub enum LoggedInFocus {
     Channels,
     Compose,
+    /// Typing a local message filter (#32) — entered from `Channels` with
+    /// `/`, exited with Enter (keeps the filter) or Esc (clears it too).
+    Search,
 }
 
 #[derive(Debug)]
@@ -85,6 +88,13 @@ pub struct LoggedInState {
     /// `presence.snapshot` (#50) — see `RealtimeEvent::PresenceSnapshot`'s
     /// doc comment for why this can go stale between reconnects.
     pub online_user_ids: HashSet<String>,
+    /// A local, client-side filter over the selected channel's cached
+    /// messages (#32) — empty means no filter. Persists across focus
+    /// changes (e.g. tabbing to Compose while a filter is active) and
+    /// across channel switches, until cleared explicitly (Esc while
+    /// editing it, or backspacing it empty) — same as a normal `/search`
+    /// in a pager, not something that resets on its own.
+    pub search_query: String,
 }
 
 impl LoggedInState {
@@ -109,7 +119,40 @@ impl LoggedInState {
             members: HashMap::new(),
             members_error: None,
             online_user_ids: HashSet::new(),
+            search_query: String::new(),
         }
+    }
+
+    /// The selected channel's cached messages that match `search_query`
+    /// (#32) — every message when the query is empty. A simple
+    /// case-insensitive substring match against the author's display name
+    /// and the message's plain-text body (via `text::html::to_plain_text`,
+    /// so HTML markup never defeats a match and never produces a false
+    /// one), which is enough for "fast local filtering" over what's
+    /// already loaded — no server round trip, no fuzzy matching.
+    pub fn visible_messages(&self) -> Option<Vec<&Message>> {
+        let messages = self.messages.get(&self.selected_channel()?.id)?;
+        if self.search_query.is_empty() {
+            return Some(messages.iter().collect());
+        }
+        let query = self.search_query.to_lowercase();
+        Some(
+            messages
+                .iter()
+                .filter(|message| Self::message_matches(message, &query))
+                .collect(),
+        )
+    }
+
+    fn message_matches(message: &Message, lowercase_query: &str) -> bool {
+        message
+            .author
+            .display_name()
+            .to_lowercase()
+            .contains(lowercase_query)
+            || crate::text::html::to_plain_text(&message.body)
+                .to_lowercase()
+                .contains(lowercase_query)
     }
 
     pub fn selected_channel(&self) -> Option<&Channel> {
@@ -257,6 +300,9 @@ impl AppState {
             state.focus = match state.focus {
                 LoggedInFocus::Channels => LoggedInFocus::Compose,
                 LoggedInFocus::Compose => LoggedInFocus::Channels,
+                // Tab out of search the same way Enter does: keep whatever
+                // filter is typed, just stop editing it.
+                LoggedInFocus::Search => LoggedInFocus::Channels,
             };
             return None;
         }
@@ -264,6 +310,7 @@ impl AppState {
         match state.focus {
             LoggedInFocus::Channels => Self::on_channels_key(state, key, should_quit),
             LoggedInFocus::Compose => Self::on_compose_key(state, key),
+            LoggedInFocus::Search => Self::on_search_key(state, key),
         }
     }
 
@@ -282,6 +329,10 @@ impl AppState {
                 let channel_id = state.selected_channel()?.id.clone();
                 Some(state.request_messages(channel_id))
             }
+            KeyCode::Char('/') => {
+                state.focus = LoggedInFocus::Search;
+                None
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 if state.selected > 0 {
                     state.selected -= 1;
@@ -297,6 +348,38 @@ impl AppState {
                     state.message_scroll = 0;
                     return Self::load_selected(state);
                 }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Typing (or clearing) the local message filter (#32). Every keystroke
+    /// resets `message_scroll` to 0 so the view jumps back to the newest
+    /// *matching* message rather than staying at whatever scroll offset
+    /// made sense for the old (larger, or differently-filtered) result set.
+    fn on_search_key(state: &mut LoggedInState, key: KeyEvent) -> Option<Command> {
+        match key.code {
+            KeyCode::Char(c) => {
+                state.search_query.push(c);
+                state.message_scroll = 0;
+                None
+            }
+            KeyCode::Backspace => {
+                state.search_query.pop();
+                state.message_scroll = 0;
+                None
+            }
+            // Enter keeps the filter and just stops editing it; Esc clears
+            // it too — the same distinction a pager's /search makes
+            // between confirming a search and cancelling it outright.
+            KeyCode::Enter => {
+                state.focus = LoggedInFocus::Channels;
+                None
+            }
+            KeyCode::Esc => {
+                state.search_query.clear();
+                state.focus = LoggedInFocus::Channels;
                 None
             }
             _ => None,
@@ -1015,6 +1098,118 @@ mod tests {
         assert!(
             matches!(command, Some(Command::LoadMessages { channel_id, .. }) if channel_id == "c2")
         );
+    }
+
+    fn message_with(id: &str, author: &str, body: &str) -> Message {
+        Message {
+            id: id.to_string(),
+            kind: "user".to_string(),
+            system_event: None,
+            body: body.to_string(),
+            created_at: Utc::now(),
+            deleted_at: None,
+            author: MessageAuthor {
+                id: format!("{author}-id"),
+                name: author.to_string(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn slash_enters_search_focus_from_channels() {
+        let mut state = logged_in_with_channels(["General"]);
+        assert!(state.on_key(key(KeyCode::Char('/'))).is_none());
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.focus, LoggedInFocus::Search);
+    }
+
+    #[test]
+    fn typing_a_query_filters_to_matching_messages_only() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![
+                    message_with("m1", "Chris", "<p>anyone up for hiking</p>"),
+                    message_with("m2", "Rachel", "<p>let's watch a movie</p>"),
+                ],
+                false,
+            )),
+        );
+
+        state.on_key(key(KeyCode::Char('/')));
+        for c in "hiking".chars() {
+            state.on_key(key(KeyCode::Char(c)));
+        }
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let visible = logged_in.visible_messages().unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "m1");
+    }
+
+    #[test]
+    fn a_query_also_matches_the_authors_display_name() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![
+                    message_with("m1", "Chris", "<p>hello</p>"),
+                    message_with("m2", "Rachel", "<p>hi there</p>"),
+                ],
+                false,
+            )),
+        );
+
+        state.on_key(key(KeyCode::Char('/')));
+        for c in "rachel".chars() {
+            // lowercase query, mixed-case name
+            state.on_key(key(KeyCode::Char(c)));
+        }
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let visible = logged_in.visible_messages().unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "m2");
+    }
+
+    #[test]
+    fn escape_clears_the_query_and_returns_to_channels_focus() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Char('/')));
+        state.on_key(key(KeyCode::Char('x')));
+        state.on_key(key(KeyCode::Esc));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.focus, LoggedInFocus::Channels);
+        assert_eq!(logged_in.search_query, "");
+    }
+
+    #[test]
+    fn enter_keeps_the_query_but_returns_to_channels_focus() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Char('/')));
+        state.on_key(key(KeyCode::Char('x')));
+        state.on_key(key(KeyCode::Enter));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.focus, LoggedInFocus::Channels);
+        assert_eq!(logged_in.search_query, "x");
     }
 
     #[test]

@@ -38,6 +38,25 @@ pub fn to_lines(html: &str) -> Vec<Line<'static>> {
     ctx.lines
 }
 
+/// A message body flattened to plain text — decoded entities, no markup,
+/// every line joined with a space. Not for display (see `to_lines`); this
+/// exists for substring matching (#32's local message search), which needs
+/// something to search against but doesn't care about styling or line
+/// breaks. Built on `to_lines` rather than a separate parse pass, so it
+/// stays consistent with whatever `to_lines` actually renders.
+pub fn to_plain_text(html: &str) -> String {
+    to_lines(html)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Fmt {
     style: Style,
@@ -453,5 +472,17 @@ mod tests {
         // path (unparseable input) must still not leak control characters.
         let rendered = plain("plain \u{1b} text");
         assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn to_plain_text_strips_markup_and_decodes_entities() {
+        let text = to_plain_text("<p>Hello <strong>world</strong> &amp; friends</p>");
+        assert_eq!(text, "Hello world & friends");
+    }
+
+    #[test]
+    fn to_plain_text_joins_multiple_paragraphs_with_a_space() {
+        let text = to_plain_text("<p>first</p><p>second</p>");
+        assert_eq!(text, "first second");
     }
 }
