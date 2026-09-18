@@ -151,3 +151,4 @@
 {"at":"2026-09-17T18:01:21Z","id":32,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-17T18:01:21Z","id":32,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
 {"at":"2026-09-17T18:01:34Z","id":6,"by":"Christopher Vachon","as":"user","type":"state","from":"Todo","to":"Done"}
+{"at":"2026-09-18T13:54:59Z","id":60,"by":"Christopher Vachon","as":"user","type":"created","title":"Show message thread replies","state":"Done"}
