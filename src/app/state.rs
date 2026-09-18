@@ -105,6 +105,18 @@ pub struct LoggedInState {
     /// second one before the first resolves (same pattern as
     /// `loading_older`).
     threads_loading: HashSet<String>,
+    /// Root ids whose cached replies (#61) are known stale and must be
+    /// refetched even though they're already cached — set when this
+    /// client's own reply to that thread lands, since the send doesn't
+    /// reconcile the new reply into `thread_replies` locally the way
+    /// `on_message_sent` does for the plain message list (a full refetch,
+    /// not a local splice — same reasoning as that doc comment). Without
+    /// this, `threads_needing_fetch` would never re-fetch an
+    /// already-cached thread, so a just-sent reply would never appear
+    /// until something else happened to evict the cache. Consumed by
+    /// `mark_threads_loading`, the same way `threads_loading` guards the
+    /// fetch itself.
+    threads_pending_refresh: HashSet<String>,
     /// The message currently targeted for a thread reply (#61) — entered
     /// from `Compose` focus with Right on an empty draft (targeting the
     /// last visible message), moved with Up/Down, cleared with Esc or by
@@ -138,6 +150,7 @@ impl LoggedInState {
             search_query: String::new(),
             thread_replies: HashMap::new(),
             threads_loading: HashSet::new(),
+            threads_pending_refresh: HashSet::new(),
             thread_reply_target: None,
         }
     }
@@ -702,6 +715,17 @@ impl AppState {
             Ok(()) => {
                 state.compose.clear();
                 state.send_error = None;
+                // A reply just landed in this thread but isn't reconciled
+                // into `thread_replies` locally (see below) — flag it so
+                // the reload this triggers re-fetches that thread's cache
+                // too, even though it's already cached (#61). Without
+                // this, the reply count on the root updates (from the
+                // plain reload below) but the reply itself never appears
+                // in either the thread view or the inline indented
+                // preview until something else happens to evict the cache.
+                if let Some(root_id) = &state.thread_reply_target {
+                    state.threads_pending_refresh.insert(root_id.clone());
+                }
                 // Force a reload rather than splicing the new message in
                 // locally: the send response doesn't carry the decorated
                 // shape (author/reactions/mentions) GET returns, and a
@@ -743,12 +767,15 @@ impl AppState {
     }
 
     /// Root message ids in `channel_id`'s cache that need a thread fetch:
-    /// they have replies (`reply_count > 0`) but aren't cached and aren't
-    /// already being fetched (#60). Call after any successful messages
-    /// load (`tui::run` does, right after `on_messages_loaded`/
+    /// they have replies (`reply_count > 0`) and aren't already being
+    /// fetched (#60), and either aren't cached yet or are flagged stale via
+    /// `threads_pending_refresh` (#61 — this client's own reply to an
+    /// already-cached thread). Call after any successful messages load
+    /// (`tui::run` does, right after `on_messages_loaded`/
     /// `on_older_messages_loaded`) — every reload can surface roots that
-    /// weren't visible before (an older page, or a root gaining its first
-    /// reply since the last load).
+    /// weren't visible before (an older page, a root gaining its first
+    /// reply since the last load, or one flagged stale by a just-sent
+    /// reply).
     pub fn threads_needing_fetch(&self, channel_id: &str) -> Vec<String> {
         let Screen::LoggedIn(state) = &self.screen else {
             return Vec::new();
@@ -760,8 +787,9 @@ impl AppState {
             .iter()
             .filter(|m| {
                 m.reply_count > 0
-                    && !state.thread_replies.contains_key(&m.id)
                     && !state.threads_loading.contains(&m.id)
+                    && (!state.thread_replies.contains_key(&m.id)
+                        || state.threads_pending_refresh.contains(&m.id))
             })
             .map(|m| m.id.clone())
             .collect()
@@ -770,10 +798,14 @@ impl AppState {
     /// Marks `root_ids` as having a fetch in flight — called right before
     /// `tui::run` actually spawns each fetch, so a second call to
     /// `threads_needing_fetch` before any of them resolve doesn't return
-    /// the same ids again.
+    /// the same ids again. Also consumes any pending-refresh flag on them
+    /// (#61) — the fetch about to run will satisfy it.
     pub fn mark_threads_loading(&mut self, root_ids: &[String]) {
         if let Screen::LoggedIn(state) = &mut self.screen {
             state.threads_loading.extend(root_ids.iter().cloned());
+            for root_id in root_ids {
+                state.threads_pending_refresh.remove(root_id);
+            }
         }
     }
 
@@ -1309,6 +1341,45 @@ mod tests {
             state.threads_needing_fetch("c1"),
             Vec::<String>::new(),
             "an in-flight fetch shouldn't be queued again"
+        );
+    }
+
+    #[test]
+    fn sending_a_reply_forces_that_threads_already_cached_replies_to_refresh() {
+        // Regression test: sending a reply used to reload the plain message
+        // list (correctly refreshing the root's reply_count) but never
+        // invalidated the already-cached thread_replies entry, so the new
+        // reply never showed up — neither in thread-reply mode nor in the
+        // inline indented preview — until something else happened to evict
+        // the cache. Reported live: the reply appeared instantly in the web
+        // app, but not in the CLI, even though the reply count did update.
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 1)], false)),
+        );
+        state.on_thread_loaded(
+            "root1".to_string(),
+            Ok(vec![message_with("reply1", "Christopher", "<p>hi</p>")]),
+        );
+        assert_eq!(
+            state.threads_needing_fetch("c1"),
+            Vec::<String>::new(),
+            "already cached — shouldn't need a refetch on its own"
+        );
+
+        // Target root1 for a reply and send it successfully.
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right));
+        state.on_key(key(KeyCode::Char('y')));
+        state.on_key(key(KeyCode::Enter));
+        state.on_message_sent("c1".to_string(), Ok(()));
+
+        assert_eq!(
+            state.threads_needing_fetch("c1"),
+            vec!["root1".to_string()],
+            "a successful reply should force that thread's cache to refresh"
         );
     }
 
