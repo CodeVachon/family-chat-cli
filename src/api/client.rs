@@ -144,13 +144,27 @@ impl ApiClient {
     /// `message` is the raw insert row (no author/reactions/mentions), so
     /// this deliberately doesn't try to parse and return it — callers
     /// reconcile by reloading the channel's messages.
-    pub async fn send_message(&self, channel_id: &str, body_html: &str) -> Result<(), ApiError> {
+    ///
+    /// `thread_root_id`, when given, makes this a thread reply (#61) —
+    /// confirmed live that the server accepts a `threadRootId` field here
+    /// and creates a real reply (round-tripped through `GET .../thread` to
+    /// verify it shows up with `threadRootId` set correctly).
+    pub async fn send_message(
+        &self,
+        channel_id: &str,
+        body_html: &str,
+        thread_root_id: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let mut payload = serde_json::json!({ "body": body_html });
+        if let Some(root_id) = thread_root_id {
+            payload["threadRootId"] = serde_json::Value::String(root_id.to_string());
+        }
         let response = self
             .authed(
                 self.http
                     .post(self.url(&format!("/api/v1/channels/{channel_id}/messages"))),
             )
-            .json(&serde_json::json!({ "body": body_html }))
+            .json(&payload)
             .send()
             .await?;
         if response.status().is_success() {
@@ -486,7 +500,32 @@ mod tests {
         let client = ApiClient::new(server.uri());
         client.set_token(Some("tok_abc123".to_string()));
 
-        client.send_message("c1", "<p>hi</p>").await.unwrap();
+        client.send_message("c1", "<p>hi</p>", None).await.unwrap();
+    }
+
+    /// Payload shape confirmed live against the real "Testing" channel
+    /// (#61): `{"body":"...","threadRootId":"<root id>"}` created a real
+    /// reply, round-tripped through `GET .../thread` to verify.
+    #[tokio::test]
+    async fn send_message_includes_the_thread_root_id_when_replying() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/channels/c1/messages"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "body": "<p>thanks</p>",
+                "threadRootId": "root1"
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "message": { "id": "m2", "channelId": "c1", "body": "<p>thanks</p>" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        client
+            .send_message("c1", "<p>thanks</p>", Some("root1"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -501,7 +540,10 @@ mod tests {
             .await;
 
         let client = ApiClient::new(server.uri());
-        let error = client.send_message("c1", "<p></p>").await.unwrap_err();
+        let error = client
+            .send_message("c1", "<p></p>", None)
+            .await
+            .unwrap_err();
 
         assert!(
             matches!(error, ApiError::Validation(_)),
@@ -535,7 +577,10 @@ mod tests {
             .await;
 
         let client = ApiClient::new(server.uri());
-        let error = client.send_message("c1", "<p></p>").await.unwrap_err();
+        let error = client
+            .send_message("c1", "<p></p>", None)
+            .await
+            .unwrap_err();
 
         assert!(matches!(error, ApiError::Validation(_)));
         assert_eq!(error.to_string(), "body: Message cannot be empty");
@@ -553,7 +598,10 @@ mod tests {
             .await;
 
         let client = ApiClient::new(server.uri());
-        let error = client.send_message("c1", "<p>hi</p>").await.unwrap_err();
+        let error = client
+            .send_message("c1", "<p>hi</p>", None)
+            .await
+            .unwrap_err();
 
         assert!(
             matches!(error, ApiError::RateLimited(_)),

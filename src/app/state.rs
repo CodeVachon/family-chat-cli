@@ -105,6 +105,12 @@ pub struct LoggedInState {
     /// second one before the first resolves (same pattern as
     /// `loading_older`).
     threads_loading: HashSet<String>,
+    /// The message currently targeted for a thread reply (#61) — entered
+    /// from `Compose` focus with Right on an empty draft (targeting the
+    /// last visible message), moved with Up/Down, cleared with Esc or by
+    /// switching channels. `Some` also switches the messages pane over to
+    /// showing just that message's thread (see `tui::widgets`).
+    pub thread_reply_target: Option<String>,
 }
 
 impl LoggedInState {
@@ -132,6 +138,7 @@ impl LoggedInState {
             search_query: String::new(),
             thread_replies: HashMap::new(),
             threads_loading: HashSet::new(),
+            thread_reply_target: None,
         }
     }
 
@@ -169,6 +176,40 @@ impl LoggedInState {
 
     pub fn selected_channel(&self) -> Option<&Channel> {
         self.channels.as_ref().and_then(|c| c.get(self.selected))
+    }
+
+    /// The message currently targeted for a thread reply (#61), resolved
+    /// from `thread_reply_target` against `visible_messages` — used by
+    /// `tui::widgets` to render the thread view.
+    pub fn thread_reply_target_message(&self) -> Option<&Message> {
+        let target = self.thread_reply_target.as_deref()?;
+        self.visible_messages()?
+            .into_iter()
+            .find(|m| m.id == target)
+    }
+
+    /// The initial thread-reply target on a bare Right arrow (#61) — the
+    /// most recent (last) currently visible message.
+    fn last_visible_message_id(&self) -> Option<String> {
+        self.visible_messages()?.last().map(|m| m.id.clone())
+    }
+
+    /// Moves `thread_reply_target` by `delta` within `visible_messages`
+    /// (#61) — clamped at both ends rather than wrapping: jumping from the
+    /// newest message straight back to the oldest on a single arrow press
+    /// would be disorienting in a channel with any real history.
+    fn move_thread_selection(&mut self, delta: isize) {
+        let Some(current) = self.thread_reply_target.clone() else {
+            return;
+        };
+        let Some(visible) = self.visible_messages() else {
+            return;
+        };
+        let Some(index) = visible.iter().position(|m| m.id == current) else {
+            return;
+        };
+        let new_index = (index as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+        self.thread_reply_target = Some(visible[new_index].id.clone());
     }
 
     /// Builds a `LoadMessages` command and records it as the latest
@@ -349,6 +390,7 @@ impl AppState {
                 if state.selected > 0 {
                     state.selected -= 1;
                     state.message_scroll = 0;
+                    state.thread_reply_target = None;
                     return Self::load_selected(state);
                 }
                 None
@@ -358,6 +400,7 @@ impl AppState {
                 if state.selected + 1 < len {
                     state.selected += 1;
                     state.message_scroll = 0;
+                    state.thread_reply_target = None;
                     return Self::load_selected(state);
                 }
                 None
@@ -401,8 +444,33 @@ impl AppState {
     /// The draft is kept in `state.compose` until a send is *confirmed*
     /// successful (see `on_message_sent`) — a failed or in-flight send must
     /// never lose what the user typed (#31).
+    ///
+    /// Right on an empty draft enters thread-reply mode (#61), targeting the
+    /// last visible message; Up/Down then move that target, and Esc exits
+    /// the mode. These are only checked once the draft is confirmed empty
+    /// (Right) or a target is already set (Up/Down/Esc), so they never
+    /// shadow ordinary typing — an arrow key while composing real text does
+    /// nothing here, same as before this mode existed.
     fn on_compose_key(state: &mut LoggedInState, key: KeyEvent) -> Option<Command> {
         match key.code {
+            KeyCode::Right if state.compose.is_empty() && state.thread_reply_target.is_none() => {
+                state.thread_reply_target = state.last_visible_message_id();
+                state.message_scroll = 0;
+                None
+            }
+            KeyCode::Up if state.thread_reply_target.is_some() => {
+                state.move_thread_selection(-1);
+                None
+            }
+            KeyCode::Down if state.thread_reply_target.is_some() => {
+                state.move_thread_selection(1);
+                None
+            }
+            KeyCode::Esc if state.thread_reply_target.is_some() => {
+                state.thread_reply_target = None;
+                state.message_scroll = 0;
+                None
+            }
             KeyCode::Char(c) => {
                 state.compose.push(c);
                 state.send_error = None;
@@ -422,6 +490,7 @@ impl AppState {
                 Some(Command::SendMessage {
                     channel_id,
                     body: state.compose.clone(),
+                    thread_root_id: state.thread_reply_target.clone(),
                 })
             }
             _ => None,
@@ -897,9 +966,14 @@ mod tests {
 
         let first = state.on_key(key(KeyCode::Enter));
         match first {
-            Some(Command::SendMessage { channel_id, body }) => {
+            Some(Command::SendMessage {
+                channel_id,
+                body,
+                thread_root_id,
+            }) => {
                 assert_eq!(channel_id, "c1");
                 assert_eq!(body, "hi");
+                assert_eq!(thread_root_id, None);
             }
             other => panic!("expected SendMessage, got {other:?}"),
         }
@@ -1378,6 +1452,152 @@ mod tests {
         };
         assert_eq!(logged_in.focus, LoggedInFocus::Channels);
         assert_eq!(logged_in.search_query, "x");
+    }
+
+    #[test]
+    fn right_arrow_on_empty_compose_enters_thread_mode_targeting_the_last_message() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![
+                    message_with("m1", "Chris", "<p>first</p>"),
+                    message_with("m2", "Rachel", "<p>second</p>"),
+                ],
+                false,
+            )),
+        );
+        state.on_key(key(KeyCode::Tab)); // focus Compose
+
+        assert!(state.on_key(key(KeyCode::Right)).is_none());
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.thread_reply_target, Some("m2".to_string()));
+    }
+
+    #[test]
+    fn right_arrow_is_ignored_once_compose_has_text() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('h')));
+        state.on_key(key(KeyCode::Right));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.thread_reply_target, None);
+        assert_eq!(
+            logged_in.compose, "h",
+            "the arrow must not be swallowed as text either"
+        );
+    }
+
+    #[test]
+    fn up_and_down_move_the_thread_selection_while_in_thread_mode() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![
+                    message_with("m1", "Chris", "<p>first</p>"),
+                    message_with("m2", "Rachel", "<p>second</p>"),
+                    message_with("m3", "Chris", "<p>third</p>"),
+                ],
+                false,
+            )),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // targets m3, the newest
+
+        state.on_key(key(KeyCode::Up)); // older -> m2
+        {
+            let Screen::LoggedIn(logged_in) = &state.screen else {
+                panic!("expected LoggedIn");
+            };
+            assert_eq!(logged_in.thread_reply_target, Some("m2".to_string()));
+        }
+
+        state.on_key(key(KeyCode::Up)); // older -> m1
+        state.on_key(key(KeyCode::Up)); // already the oldest — clamps, doesn't wrap
+        {
+            let Screen::LoggedIn(logged_in) = &state.screen else {
+                panic!("expected LoggedIn");
+            };
+            assert_eq!(logged_in.thread_reply_target, Some("m1".to_string()));
+        }
+
+        state.on_key(key(KeyCode::Down)); // newer -> m2
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.thread_reply_target, Some("m2".to_string()));
+    }
+
+    #[test]
+    fn escape_exits_thread_mode() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right));
+        state.on_key(key(KeyCode::Esc));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.thread_reply_target, None);
+    }
+
+    #[test]
+    fn sending_while_in_thread_mode_attaches_the_thread_root_id() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // targets m1
+        state.on_key(key(KeyCode::Char('y')));
+
+        let command = state.on_key(key(KeyCode::Enter));
+        match command {
+            Some(Command::SendMessage { thread_root_id, .. }) => {
+                assert_eq!(thread_root_id, Some("m1".to_string()));
+            }
+            other => panic!("expected SendMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switching_channels_exits_thread_mode() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right));
+        state.on_key(key(KeyCode::Tab)); // back to Channels focus
+        state.on_key(key(KeyCode::Down)); // switch to "Random"
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.thread_reply_target, None);
     }
 
     #[test]

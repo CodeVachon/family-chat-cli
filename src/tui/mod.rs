@@ -152,8 +152,18 @@ async fn run_app(
                         before_created_at,
                     );
                 }
-                Command::SendMessage { channel_id, body } => {
-                    spawn_send_message(client.clone(), tx.clone(), channel_id, body);
+                Command::SendMessage {
+                    channel_id,
+                    body,
+                    thread_root_id,
+                } => {
+                    spawn_send_message(
+                        client.clone(),
+                        tx.clone(),
+                        channel_id,
+                        body,
+                        thread_root_id,
+                    );
                 }
                 Command::Logout => {
                     state.on_logout();
@@ -257,10 +267,13 @@ fn spawn_send_message(
     tx: mpsc::UnboundedSender<Event>,
     channel_id: String,
     body: String,
+    thread_root_id: Option<String>,
 ) {
     tokio::spawn(async move {
         let html = crate::text::html::plain_text_to_html(&body);
-        let result = client.send_message(&channel_id, &html).await;
+        let result = client
+            .send_message(&channel_id, &html, thread_root_id.as_deref())
+            .await;
         log_if_err("send message", &result);
         let _ = tx.send(Event::MessageSent { channel_id, result });
     });

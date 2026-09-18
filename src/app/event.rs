@@ -77,6 +77,11 @@ pub enum Command {
     SendMessage {
         channel_id: String,
         body: String,
+        /// `Some(root_id)` when composed while replying to a thread (#61) —
+        /// confirmed live that the server accepts this field on
+        /// `POST .../messages` and creates a real reply (round-tripped
+        /// through `GET .../thread` to verify).
+        thread_root_id: Option<String>,
     },
     Logout,
     Quit,

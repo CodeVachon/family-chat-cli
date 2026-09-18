@@ -276,63 +276,81 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     // (which still reflects the *raw* cache) because "no messages at all"
     // and "the filter matched nothing" need different pane text below.
     let visible_messages = state.visible_messages();
-    // Same pane-local principle as the channels error above: only replace
-    // the message pane's content with the error when there's nothing cached
-    // to fall back on; otherwise note it with a short, fixed title marker
-    // (same width reasoning as the channels pane) and keep showing what was
-    // already loaded.
-    let messages_title = {
-        let base = match &state.messages_error {
-            Some(_) if cached_messages.is_some() => {
-                format!("{selected_channel_title} — error")
-            }
-            _ => selected_channel_title,
-        };
-        if state.search_query.is_empty() {
-            base
-        } else {
-            format!("{base} — /{}", state.search_query)
-        }
-    };
-    let body: Vec<Line> = if channels.is_empty() {
-        vec![Line::from("No channels yet.")]
-    } else if let Some(error) = &state.messages_error {
-        if cached_messages.is_none() {
-            vec![Line::styled(
-                error.as_str().to_string(),
-                Style::default().fg(Color::Red),
-            )]
-        } else {
-            windowed_messages(
-                visible_messages.as_deref(),
-                &state.thread_replies,
-                messages_area,
-                state.message_scroll,
+    // Thread-reply mode (#61) replaces the whole pane — title and body —
+    // with just the targeted message's thread, rather than filtering the
+    // normal history view the way search does.
+    let (messages_title, body): (String, Vec<Line>) =
+        if let Some(target) = state.thread_reply_target_message() {
+            (
+                format!("{selected_channel_title} — Thread"),
+                windowed(
+                    thread_view_lines(state, target),
+                    visible_cols(messages_area),
+                    visible_rows(messages_area),
+                    state.message_scroll,
+                ),
             )
-        }
-    } else if state.loading_messages && cached_messages.is_none() {
-        // Only show the loading placeholder when there's nothing cached yet
-        // for this channel — a reload after sending, switching back to an
-        // already-seen channel, or a realtime resync should update the pane
-        // quietly once the fresh page arrives, not blank out messages that
-        // are still perfectly valid to keep showing meanwhile.
-        vec![Line::from("Loading messages…")]
-    } else {
-        match (cached_messages, visible_messages.as_deref()) {
-            (Some(raw), _) if raw.is_empty() => vec![Line::from("No messages yet.")],
-            (Some(_), Some([])) => vec![Line::from(format!(
-                "No messages match \"{}\".",
-                state.search_query
-            ))],
-            (Some(_), Some(_)) => windowed_messages(
-                visible_messages.as_deref(),
-                &state.thread_replies,
-                messages_area,
-                state.message_scroll,
-            ),
-            _ => vec![],
-        }
-    };
+        } else {
+            // Same pane-local principle as the channels error above: only
+            // replace the message pane's content with the error when
+            // there's nothing cached to fall back on; otherwise note it
+            // with a short, fixed title marker (same width reasoning as
+            // the channels pane) and keep showing what was already loaded.
+            let messages_title = {
+                let base = match &state.messages_error {
+                    Some(_) if cached_messages.is_some() => {
+                        format!("{selected_channel_title} — error")
+                    }
+                    _ => selected_channel_title,
+                };
+                if state.search_query.is_empty() {
+                    base
+                } else {
+                    format!("{base} — /{}", state.search_query)
+                }
+            };
+            let body: Vec<Line> = if channels.is_empty() {
+                vec![Line::from("No channels yet.")]
+            } else if let Some(error) = &state.messages_error {
+                if cached_messages.is_none() {
+                    vec![Line::styled(
+                        error.as_str().to_string(),
+                        Style::default().fg(Color::Red),
+                    )]
+                } else {
+                    windowed_messages(
+                        visible_messages.as_deref(),
+                        &state.thread_replies,
+                        messages_area,
+                        state.message_scroll,
+                    )
+                }
+            } else if state.loading_messages && cached_messages.is_none() {
+                // Only show the loading placeholder when there's nothing
+                // cached yet for this channel — a reload after sending,
+                // switching back to an already-seen channel, or a realtime
+                // resync should update the pane quietly once the fresh page
+                // arrives, not blank out messages that are still perfectly
+                // valid to keep showing meanwhile.
+                vec![Line::from("Loading messages…")]
+            } else {
+                match (cached_messages, visible_messages.as_deref()) {
+                    (Some(raw), _) if raw.is_empty() => vec![Line::from("No messages yet.")],
+                    (Some(_), Some([])) => vec![Line::from(format!(
+                        "No messages match \"{}\".",
+                        state.search_query
+                    ))],
+                    (Some(_), Some(_)) => windowed_messages(
+                        visible_messages.as_deref(),
+                        &state.thread_replies,
+                        messages_area,
+                        state.message_scroll,
+                    ),
+                    _ => vec![],
+                }
+            };
+            (messages_title, body)
+        };
     frame.render_widget(
         Paragraph::new(Text::from(body))
             .block(Block::default().borders(Borders::ALL).title(messages_title))
@@ -345,10 +363,15 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     // panes above — the compose box is only 1 line tall inside its border,
     // with no room to wrap a full error message. The draft itself is never
     // lost (see #31), and the full message is in the log file.
-    let compose_title = match (&state.send_error, state.sending) {
-        (Some(_), _) => "Message — send failed".to_string(),
-        (None, true) => "Sending…".to_string(),
-        (None, false) => "Message".to_string(),
+    let compose_title = match (
+        &state.send_error,
+        state.sending,
+        state.thread_reply_target.is_some(),
+    ) {
+        (Some(_), _, _) => "Message — send failed".to_string(),
+        (None, true, _) => "Sending…".to_string(),
+        (None, false, true) => "Reply".to_string(),
+        (None, false, false) => "Message".to_string(),
     };
     frame.render_widget(
         Paragraph::new(state.compose.as_str()).block(
@@ -372,11 +395,14 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     // the usual hints — there's nowhere else in this layout with room for
     // a dedicated search box, and the hints aren't useful mid-search anyway.
     let searching = state.focus == LoggedInFocus::Search;
+    let replying = state.thread_reply_target.is_some();
     let hint = if searching {
         format!("/{}", state.search_query)
+    } else if replying {
+        "Replying — \u{2191}/\u{2193} change message · Enter send · Esc cancel".to_string()
     } else {
         format!(
-            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · / search · Enter send · r refresh · l logout · q quit",
+            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · / search · \u{2192} reply · Enter send · r refresh · l logout · q quit",
             state.user.name
         )
     };
@@ -653,6 +679,37 @@ fn messages_to_lines(
                 }
             }
         }
+    }
+
+    lines
+}
+
+/// The whole-pane thread view shown in thread-reply mode (#61): the
+/// targeted message, then its cached replies (or a prompt to start the
+/// thread if there are none yet). Unlike the inline preview
+/// (`messages_to_lines`'s arrow-indented replies under a root still shown
+/// among the rest of the channel's history), this is the *entire* pane
+/// body, so replies render as plain messages rather than indented — there's
+/// nothing else on screen to indent them relative to.
+fn thread_view_lines(state: &LoggedInState, target: &Message) -> Vec<Line<'static>> {
+    let label_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+    let mut lines = vec![Line::styled("Replying to:", label_style)];
+    lines.extend(message_lines(target));
+    lines.push(Line::from(""));
+
+    match state.thread_replies.get(&target.id) {
+        Some(replies) if !replies.is_empty() => {
+            lines.push(Line::styled("Replies:", label_style));
+            for reply in replies {
+                lines.extend(message_lines(reply));
+            }
+        }
+        _ => lines.push(Line::styled(
+            "No replies yet — type below to start this thread.",
+            label_style,
+        )),
     }
 
     lines
@@ -1273,6 +1330,66 @@ mod tests {
             content.contains("↳"),
             "a reply should render indented under its root:\n{content}"
         );
+    }
+
+    #[test]
+    fn thread_reply_mode_replaces_the_pane_with_just_that_threads_replying_to_the_prompt() {
+        let mut state = logged_in_state_with_messages(2);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.thread_reply_target = Some("m1".to_string());
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("Replying to:"));
+        assert!(
+            content.contains("msg-1"),
+            "the targeted message should show:\n{content}"
+        );
+        assert!(
+            content.contains("No replies yet"),
+            "an un-cached/empty thread should prompt to start it:\n{content}"
+        );
+        assert!(
+            content.contains("Reply"),
+            "the compose box's title should say Reply while targeting a thread:\n{content}"
+        );
+        assert!(
+            content.contains("— Thread"),
+            "the messages pane title should note thread-reply mode:\n{content}"
+        );
+    }
+
+    #[test]
+    fn thread_reply_mode_shows_cached_replies_under_the_target() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.thread_reply_target = Some("m0".to_string());
+            let reply = Message {
+                id: "reply1".to_string(),
+                kind: "user".to_string(),
+                system_event: None,
+                body: "<p>thank you</p>".to_string(),
+                created_at: Utc::now(),
+                deleted_at: None,
+                author: MessageAuthor {
+                    id: "u2".to_string(),
+                    name: "Christopher".to_string(),
+                    preferences: None,
+                },
+                attachments: Vec::new(),
+                thread_root_id: Some("m0".to_string()),
+                reply_count: 0,
+            };
+            logged_in
+                .thread_replies
+                .insert("m0".to_string(), vec![reply]);
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("Replies:"));
+        assert!(content.contains("thank you"));
     }
 
     #[test]
