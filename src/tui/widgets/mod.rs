@@ -336,6 +336,16 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
             } else {
                 match (cached_messages, visible_messages.as_deref()) {
                     (Some(raw), _) if raw.is_empty() => vec![Line::from("No messages yet.")],
+                    // An empty `visible_messages` with a non-empty raw
+                    // cache used to only happen from an active search
+                    // filter — now it can also happen when every cached
+                    // message has been deleted (#61 follow-up: deleted
+                    // messages are filtered out of `visible_messages`, see
+                    // its doc comment). Pick the wording that actually
+                    // matches which of those it is.
+                    (Some(_), Some([])) if state.search_query.is_empty() => {
+                        vec![Line::from("No messages yet.")]
+                    }
                     (Some(_), Some([])) => vec![Line::from(format!(
                         "No messages match \"{}\".",
                         state.search_query
@@ -1262,6 +1272,41 @@ mod tests {
 
         let content = render_to_text(&state, 110, 15);
         assert!(content.contains("No messages match"));
+    }
+
+    #[test]
+    fn a_soft_deleted_message_never_renders_even_though_it_is_still_cached() {
+        let mut state = logged_in_state_with_messages(3);
+        logged_in_state_mut(&mut state)
+            .messages
+            .get_mut("c1")
+            .unwrap()[1]
+            .deleted_at = Some(Utc::now());
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("msg-0"));
+        assert!(
+            !content.contains("msg-1"),
+            "the deleted message's original body must never render:\n{content}"
+        );
+        assert!(content.contains("msg-2"));
+    }
+
+    #[test]
+    fn a_channel_with_only_deleted_messages_shows_the_empty_state_not_a_filter_message() {
+        let mut state = logged_in_state_with_messages(2);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            for message in logged_in.messages.get_mut("c1").unwrap() {
+                message.deleted_at = Some(Utc::now());
+            }
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(
+            content.contains("No messages yet."),
+            "with no active search, this must read as empty, not as a filtered-out search result:\n{content}"
+        );
     }
 
     #[test]

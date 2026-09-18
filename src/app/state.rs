@@ -162,15 +162,26 @@ impl LoggedInState {
     /// so HTML markup never defeats a match and never produces a false
     /// one), which is enough for "fast local filtering" over what's
     /// already loaded — no server round trip, no fuzzy matching.
+    ///
+    /// A soft-deleted message (`deleted_at` set) is always dropped here,
+    /// regardless of the query. The server keeps deleted messages in the
+    /// same paginated response as everything else, with their original
+    /// `body` still intact — nothing else in this app strips them out, so
+    /// without this a deleted message stayed fully visible (and readable)
+    /// forever. Filtered here, at the single point everything else reads
+    /// the channel's messages through, rather than at load time — that
+    /// keeps `state.messages` itself a faithful, complete cache (still
+    /// needed for pagination's cursor, which anchors on the oldest
+    /// *cached* message regardless of its deleted status).
     pub fn visible_messages(&self) -> Option<Vec<&Message>> {
         let messages = self.messages.get(&self.selected_channel()?.id)?;
+        let not_deleted = messages.iter().filter(|m| m.deleted_at.is_none());
         if self.search_query.is_empty() {
-            return Some(messages.iter().collect());
+            return Some(not_deleted.collect());
         }
         let query = self.search_query.to_lowercase();
         Some(
-            messages
-                .iter()
+            not_deleted
                 .filter(|message| Self::message_matches(message, &query))
                 .collect(),
         )
@@ -787,6 +798,7 @@ impl AppState {
             .iter()
             .filter(|m| {
                 m.reply_count > 0
+                    && m.deleted_at.is_none()
                     && !state.threads_loading.contains(&m.id)
                     && (!state.thread_replies.contains_key(&m.id)
                         || state.threads_pending_refresh.contains(&m.id))
@@ -813,7 +825,10 @@ impl AppState {
     /// response contains with `thread_root_id` set — the root message
     /// itself (confirmed live to always be included, `thread_root_id:
     /// null`) is dropped, since the caller already has it from the normal
-    /// channel history. A failed fetch just leaves that thread's replies
+    /// channel history. A soft-deleted reply is dropped too, same
+    /// reasoning as `visible_messages` — the server keeps it in the
+    /// response with its original body intact, so nothing else would ever
+    /// filter it out. A failed fetch just leaves that thread's replies
     /// unavailable (the root's own reply count still shows) rather than a
     /// pane-wide error for one thread among possibly several — still
     /// logged (see `tui::log_if_err`) for diagnosis.
@@ -825,7 +840,7 @@ impl AppState {
         if let Ok(messages) = result {
             let mut replies: Vec<Message> = messages
                 .into_iter()
-                .filter(|m| m.thread_root_id.is_some())
+                .filter(|m| m.thread_root_id.is_some() && m.deleted_at.is_none())
                 .collect();
             replies.sort_by_key(|m| m.created_at);
             state.thread_replies.insert(root_id, replies);
@@ -1495,6 +1510,65 @@ mod tests {
         let visible = logged_in.visible_messages().unwrap();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].id, "m2");
+    }
+
+    #[test]
+    fn a_soft_deleted_message_is_hidden_even_though_the_server_still_sends_its_body() {
+        // The server keeps a soft-deleted message in the same paginated
+        // response as everything else, with its original body intact
+        // (confirmed live — reported: "deleted messages appear in the
+        // message channels"). Nothing in this app should ever show one.
+        let mut state = logged_in_with_channels(["General"]);
+        let mut deleted = message_with("m1", "Chris", "<p>oops, sent to the wrong channel</p>");
+        deleted.deleted_at = Some(Utc::now());
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![deleted, message_with("m2", "Chris", "<p>hi</p>")],
+                false,
+            )),
+        );
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let visible = logged_in.visible_messages().unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "m2");
+    }
+
+    #[test]
+    fn a_deleted_root_is_skipped_when_checking_which_threads_need_a_fetch() {
+        let mut state = logged_in_with_channels(["General"]);
+        let mut deleted_root = message_with_replies("root1", 1);
+        deleted_root.deleted_at = Some(Utc::now());
+        state.on_messages_loaded("c1".to_string(), 1, Ok((vec![deleted_root], false)));
+
+        assert_eq!(
+            state.threads_needing_fetch("c1"),
+            Vec::<String>::new(),
+            "a deleted root's thread will never be shown, so it shouldn't be fetched"
+        );
+    }
+
+    #[test]
+    fn a_deleted_reply_is_dropped_from_a_loaded_thread() {
+        let mut state = logged_in_with_channels(["General"]);
+        let mut live_reply = message_with("reply1", "Christopher", "<p>hi</p>");
+        live_reply.thread_root_id = Some("root1".to_string());
+        let mut deleted_reply = message_with("reply2", "Rachel", "<p>oops</p>");
+        deleted_reply.thread_root_id = Some("root1".to_string());
+        deleted_reply.deleted_at = Some(Utc::now());
+
+        state.on_thread_loaded("root1".to_string(), Ok(vec![live_reply, deleted_reply]));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let replies = logged_in.thread_replies.get("root1").unwrap();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].id, "reply1");
     }
 
     #[test]
