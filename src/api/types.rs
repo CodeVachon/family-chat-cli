@@ -119,7 +119,7 @@ pub struct Attachment {
 
 /// Present (with `kind == "system"`) on channel events — joins, leaves,
 /// additions/removals by another member, renames, and so on. `body` is
-/// empty for these; the renderer builds its text from this instead (#60).
+/// empty for these; the renderer builds its text from this instead (#58).
 /// `subject_user_id` is only present on membership events (`join`/`leave`)
 /// — a `channel_updated` event, for example, has no subject, only an actor.
 #[derive(Debug, Clone, Deserialize)]
@@ -146,6 +146,18 @@ pub struct Message {
     pub author: MessageAuthor,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Set on a reply, to the thread's root message id — `None` on both an
+    /// ordinary top-level message and on a thread's own root (confirmed
+    /// live: `GET .../messages/:id/thread`'s response has the root first,
+    /// with this null, followed by its replies, each pointing back at it).
+    #[serde(rename = "threadRootId", default)]
+    pub thread_root_id: Option<String>,
+    /// How many replies a root message has. The main paginated
+    /// `GET /channels/:id/messages` never includes replies inline (#60) —
+    /// only this count, on the root — so replies have to be fetched
+    /// separately per thread (`ApiClient::thread`) to ever be seen at all.
+    #[serde(rename = "replyCount", default)]
+    pub reply_count: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,6 +165,15 @@ pub struct MessagesResponse {
     pub messages: Vec<Message>,
     #[serde(rename = "hasMore")]
     pub has_more: bool,
+}
+
+/// `GET /channels/:id/messages/:messageId/thread` — the root message
+/// (confirmed live: first in the list, `threadRootId: null`) followed by
+/// every reply (`threadRootId` set to the root's id), oldest first, no
+/// pagination (see docs/api-contract.md).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadResponse {
+    pub messages: Vec<Message>,
 }
 
 /// The `GET /api/v1/stream` payload (see docs/api-contract.md). Every event
@@ -221,7 +242,7 @@ mod tests {
     /// A real `channel_updated` system event has no `subjectUserId` at all
     /// (only `join`/`leave` do) — this used to be a required field, which
     /// broke decoding every message in a channel the moment one rename
-    /// event showed up in its history (#60).
+    /// event showed up in its history (#58).
     #[test]
     fn a_system_event_without_a_subject_still_deserializes() {
         let json = r#"{

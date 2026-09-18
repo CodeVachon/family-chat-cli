@@ -95,6 +95,16 @@ pub struct LoggedInState {
     /// editing it, or backspacing it empty) — same as a normal `/search`
     /// in a pager, not something that resets on its own.
     pub search_query: String,
+    /// Per root-message-id: that thread's replies (root excluded), oldest
+    /// first (#60). The server never includes replies in the main
+    /// `GET /channels/:id/messages` page — only a `reply_count` on the
+    /// root — so a thread has to be fetched separately
+    /// (`ApiClient::thread`) before its replies can be shown at all.
+    pub thread_replies: HashMap<String, Vec<Message>>,
+    /// Root ids with a fetch currently in flight — guards against firing a
+    /// second one before the first resolves (same pattern as
+    /// `loading_older`).
+    threads_loading: HashSet<String>,
 }
 
 impl LoggedInState {
@@ -120,6 +130,8 @@ impl LoggedInState {
             members_error: None,
             online_user_ids: HashSet::new(),
             search_query: String::new(),
+            thread_replies: HashMap::new(),
+            threads_loading: HashSet::new(),
         }
     }
 
@@ -661,6 +673,64 @@ impl AppState {
         }
     }
 
+    /// Root message ids in `channel_id`'s cache that need a thread fetch:
+    /// they have replies (`reply_count > 0`) but aren't cached and aren't
+    /// already being fetched (#60). Call after any successful messages
+    /// load (`tui::run` does, right after `on_messages_loaded`/
+    /// `on_older_messages_loaded`) — every reload can surface roots that
+    /// weren't visible before (an older page, or a root gaining its first
+    /// reply since the last load).
+    pub fn threads_needing_fetch(&self, channel_id: &str) -> Vec<String> {
+        let Screen::LoggedIn(state) = &self.screen else {
+            return Vec::new();
+        };
+        let Some(messages) = state.messages.get(channel_id) else {
+            return Vec::new();
+        };
+        messages
+            .iter()
+            .filter(|m| {
+                m.reply_count > 0
+                    && !state.thread_replies.contains_key(&m.id)
+                    && !state.threads_loading.contains(&m.id)
+            })
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    /// Marks `root_ids` as having a fetch in flight — called right before
+    /// `tui::run` actually spawns each fetch, so a second call to
+    /// `threads_needing_fetch` before any of them resolve doesn't return
+    /// the same ids again.
+    pub fn mark_threads_loading(&mut self, root_ids: &[String]) {
+        if let Screen::LoggedIn(state) = &mut self.screen {
+            state.threads_loading.extend(root_ids.iter().cloned());
+        }
+    }
+
+    /// The response to a thread fetch (#60). Replies are whatever the
+    /// response contains with `thread_root_id` set — the root message
+    /// itself (confirmed live to always be included, `thread_root_id:
+    /// null`) is dropped, since the caller already has it from the normal
+    /// channel history. A failed fetch just leaves that thread's replies
+    /// unavailable (the root's own reply count still shows) rather than a
+    /// pane-wide error for one thread among possibly several — still
+    /// logged (see `tui::log_if_err`) for diagnosis.
+    pub fn on_thread_loaded(&mut self, root_id: String, result: Result<Vec<Message>, ApiError>) {
+        let Screen::LoggedIn(state) = &mut self.screen else {
+            return;
+        };
+        state.threads_loading.remove(&root_id);
+        if let Ok(messages) = result {
+            let mut replies: Vec<Message> = messages
+                .into_iter()
+                .filter(|m| m.thread_root_id.is_some())
+                .collect();
+            replies.sort_by_key(|m| m.created_at);
+            state.thread_replies.insert(root_id, replies);
+        }
+    }
+
     pub fn on_logout(&mut self) {
         self.screen = Screen::LoggedOut(LoginForm::new());
     }
@@ -897,6 +967,8 @@ mod tests {
                 preferences: None,
             },
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         };
         state.on_messages_loaded("c1".to_string(), 1, Ok((vec![existing], false)));
 
@@ -1114,7 +1186,103 @@ mod tests {
                 preferences: None,
             },
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         }
+    }
+
+    fn message_with_replies(id: &str, reply_count: i64) -> Message {
+        Message {
+            reply_count,
+            ..message_with(id, "Louise", "<p>root</p>")
+        }
+    }
+
+    #[test]
+    fn a_root_with_replies_needs_a_thread_fetch_until_cached() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 2)], false)),
+        );
+
+        assert_eq!(state.threads_needing_fetch("c1"), vec!["root1".to_string()]);
+
+        state.on_thread_loaded(
+            "root1".to_string(),
+            Ok(vec![message_with("reply1", "Christopher", "<p>hi</p>")]),
+        );
+        assert_eq!(
+            state.threads_needing_fetch("c1"),
+            Vec::<String>::new(),
+            "a cached thread shouldn't be re-fetched"
+        );
+    }
+
+    #[test]
+    fn marking_a_thread_loading_prevents_a_duplicate_fetch() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 1)], false)),
+        );
+
+        state.mark_threads_loading(&["root1".to_string()]);
+
+        assert_eq!(
+            state.threads_needing_fetch("c1"),
+            Vec::<String>::new(),
+            "an in-flight fetch shouldn't be queued again"
+        );
+    }
+
+    #[test]
+    fn on_thread_loaded_caches_only_the_replies_not_the_root() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.mark_threads_loading(&["root1".to_string()]);
+
+        let root = message_with_replies("root1", 2);
+        let mut reply1 = message_with("reply1", "Christopher", "<p>thank you</p>");
+        reply1.thread_root_id = Some("root1".to_string());
+        let mut reply2 = message_with("reply2", "Rachel", "<p>thank you!</p>");
+        reply2.thread_root_id = Some("root1".to_string());
+
+        state.on_thread_loaded("root1".to_string(), Ok(vec![root, reply1, reply2]));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        let replies = logged_in.thread_replies.get("root1").unwrap();
+        assert_eq!(replies.len(), 2, "the root itself should be excluded");
+        assert_eq!(replies[0].id, "reply1");
+        assert_eq!(replies[1].id, "reply2");
+    }
+
+    #[test]
+    fn a_failed_thread_fetch_still_clears_the_loading_guard() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 1)], false)),
+        );
+        state.mark_threads_loading(&["root1".to_string()]);
+
+        state.on_thread_loaded(
+            "root1".to_string(),
+            Err(ApiError::Server("boom".to_string())),
+        );
+
+        // Not cached (so the root's own reply count still shows, with no
+        // replies to display), but no longer "loading" either — otherwise
+        // a failed fetch would permanently block ever trying again.
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(!logged_in.thread_replies.contains_key("root1"));
+        assert_eq!(state.threads_needing_fetch("c1"), vec!["root1".to_string()]);
     }
 
     #[test]
@@ -1313,6 +1481,8 @@ mod tests {
                 preferences: None,
             },
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         }];
         state.on_older_messages_loaded("c1".to_string(), Ok((older, false)));
 
@@ -1351,6 +1521,8 @@ mod tests {
                     preferences: None,
                 },
                 attachments: Vec::new(),
+                thread_root_id: None,
+                reply_count: 0,
             })
             .collect();
         older.push(Message {
@@ -1366,6 +1538,8 @@ mod tests {
                 preferences: None,
             },
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         });
         state.on_older_messages_loaded("c1".to_string(), Ok((older, false)));
 
@@ -1448,6 +1622,8 @@ mod tests {
                     preferences: None,
                 },
                 attachments: Vec::new(),
+                thread_root_id: None,
+                reply_count: 0,
             })
             .collect();
         state.on_messages_loaded("c1".to_string(), seq, Ok((messages, has_more)));

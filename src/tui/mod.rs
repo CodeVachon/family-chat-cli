@@ -79,16 +79,22 @@ async fn run_app(
                 Some(Event::LoginFinished(result)) => state.on_login_finished(result),
                 Some(Event::ChannelsLoaded(result)) => state.on_channels_loaded(result),
                 Some(Event::MessagesLoaded { channel_id, seq, result }) => {
-                    state.on_messages_loaded(channel_id, seq, result);
+                    state.on_messages_loaded(channel_id.clone(), seq, result);
+                    spawn_needed_thread_fetches(&client, &tx, &mut state, &channel_id);
                     None
                 }
                 Some(Event::OlderMessagesLoaded { channel_id, result }) => {
-                    state.on_older_messages_loaded(channel_id, result);
+                    state.on_older_messages_loaded(channel_id.clone(), result);
+                    spawn_needed_thread_fetches(&client, &tx, &mut state, &channel_id);
                     None
                 }
                 Some(Event::MessageSent { channel_id, result }) => state.on_message_sent(channel_id, result),
                 Some(Event::MembersLoaded { channel_id, result }) => {
                     state.on_members_loaded(channel_id, result);
+                    None
+                }
+                Some(Event::ThreadLoaded { root_id, result }) => {
+                    state.on_thread_loaded(root_id, result);
                     None
                 }
                 Some(Event::Realtime(event)) => state.on_realtime_event(event),
@@ -280,6 +286,42 @@ fn spawn_load_members(client: ApiClient, tx: mpsc::UnboundedSender<Event>, chann
             .map(|response| response.members);
         log_if_err("load users", &result);
         let _ = tx.send(Event::MembersLoaded { channel_id, result });
+    });
+}
+
+/// Fetches every thread `AppState::threads_needing_fetch` says is missing
+/// for `channel_id` (#60) — called right after a successful messages load,
+/// since that's the only place new root ids (or new reply counts on
+/// already-seen roots) can show up. Marks them loading *before* spawning,
+/// same ordering as `maybe_load_older`'s `loading_older` guard, so a
+/// second load landing before the first thread fetch resolves doesn't
+/// queue duplicate requests for the same thread.
+fn spawn_needed_thread_fetches(
+    client: &ApiClient,
+    tx: &mpsc::UnboundedSender<Event>,
+    state: &mut AppState,
+    channel_id: &str,
+) {
+    let root_ids = state.threads_needing_fetch(channel_id);
+    if root_ids.is_empty() {
+        return;
+    }
+    state.mark_threads_loading(&root_ids);
+    for root_id in root_ids {
+        spawn_load_thread(client.clone(), tx.clone(), channel_id.to_string(), root_id);
+    }
+}
+
+fn spawn_load_thread(
+    client: ApiClient,
+    tx: mpsc::UnboundedSender<Event>,
+    channel_id: String,
+    root_id: String,
+) {
+    tokio::spawn(async move {
+        let result = client.thread(&channel_id, &root_id).await;
+        log_if_err("load thread", &result);
+        let _ = tx.send(Event::ThreadLoaded { root_id, result });
     });
 }
 

@@ -38,6 +38,14 @@ pub enum Event {
         channel_id: String,
         result: Result<Vec<ChannelMember>, ApiError>,
     },
+    /// The response to a thread fetch (#60) — spawned directly by
+    /// `tui::run` whenever `AppState::threads_needing_fetch` says one's
+    /// needed (right after a successful messages load), the same
+    /// no-dedicated-`Command` pattern as `MembersLoaded`.
+    ThreadLoaded {
+        root_id: String,
+        result: Result<Vec<Message>, ApiError>,
+    },
     Realtime(RealtimeEvent),
 }
 

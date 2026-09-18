@@ -8,7 +8,8 @@ use serde::de::DeserializeOwned;
 
 use super::error::ApiError;
 use super::types::{
-    ChannelMembersResponse, ChannelsResponse, MeResponse, MessagesResponse, SignInResponse,
+    ChannelMembersResponse, ChannelsResponse, MeResponse, Message, MessagesResponse,
+    SignInResponse, ThreadResponse,
 };
 
 #[derive(Clone)]
@@ -178,6 +179,18 @@ impl ApiClient {
         }
     }
 
+    /// `GET /channels/:id/messages/:messageId/thread` — the whole thread in
+    /// one response, root message included, no pagination (see
+    /// docs/api-contract.md). Callers filter on `thread_root_id` to tell
+    /// the root apart from its replies.
+    pub async fn thread(&self, channel_id: &str, root_id: &str) -> Result<Vec<Message>, ApiError> {
+        self.get::<ThreadResponse>(&format!(
+            "/api/v1/channels/{channel_id}/messages/{root_id}/thread"
+        ))
+        .await
+        .map(|response| response.messages)
+    }
+
     /// An authenticated, unsent request for `GET /api/v1/stream` — handed to
     /// `reqwest_eventsource::EventSource`, which owns actually sending it
     /// (and re-sending it on reconnect).
@@ -332,6 +345,64 @@ mod tests {
 
         let client = ApiClient::new(server.uri());
         client.mark_channel_read("c1").await.unwrap();
+    }
+
+    /// Payload shape confirmed live against a real thread on "The Vachons"
+    /// (#60): the root message (`threadRootId: null`) first, then its
+    /// replies (`threadRootId` set to the root's id), oldest first.
+    #[tokio::test]
+    async fn thread_returns_the_root_and_its_replies_in_order() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/channels/c1/messages/root1/thread"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [
+                    {
+                        "id": "root1",
+                        "type": "user",
+                        "threadRootId": null,
+                        "replyCount": 2,
+                        "body": "<p>Happy anniversary!</p>",
+                        "createdAt": "2026-09-18T04:47:37.442Z",
+                        "deletedAt": null,
+                        "author": { "id": "u1", "name": "Louise" }
+                    },
+                    {
+                        "id": "reply1",
+                        "type": "user",
+                        "threadRootId": "root1",
+                        "body": "<p>Thank you</p>",
+                        "createdAt": "2026-09-18T12:10:20.728Z",
+                        "deletedAt": null,
+                        "author": { "id": "u2", "name": "Christopher" }
+                    },
+                    {
+                        "id": "reply2",
+                        "type": "user",
+                        "threadRootId": "root1",
+                        "body": "<p>Thank you!</p>",
+                        "createdAt": "2026-09-18T13:26:17.980Z",
+                        "deletedAt": null,
+                        "author": { "id": "u3", "name": "Rachel" }
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let messages = client.thread("c1", "root1").await.unwrap();
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].id, "root1");
+        assert_eq!(messages[0].thread_root_id, None);
+        assert_eq!(messages[0].reply_count, 2);
+        let replies: Vec<&str> = messages
+            .iter()
+            .filter(|m| m.thread_root_id.is_some())
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(replies, ["reply1", "reply2"]);
     }
 
     #[tokio::test]

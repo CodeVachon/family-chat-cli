@@ -1,5 +1,7 @@
 //! Channel list, message pane, composer, and auth-status widgets (#24/#26).
 
+use std::collections::HashMap;
+
 use chrono::{Local, NaiveDate};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -303,6 +305,7 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         } else {
             windowed_messages(
                 visible_messages.as_deref(),
+                &state.thread_replies,
                 messages_area,
                 state.message_scroll,
             )
@@ -323,6 +326,7 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
             ))],
             (Some(_), Some(_)) => windowed_messages(
                 visible_messages.as_deref(),
+                &state.thread_replies,
                 messages_area,
                 state.message_scroll,
             ),
@@ -533,6 +537,7 @@ fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize
 /// comment for why wrapped row count, not line count, matters here).
 fn windowed_messages(
     messages: Option<&[&Message]>,
+    thread_replies: &HashMap<String, Vec<Message>>,
     area: Rect,
     scroll: usize,
 ) -> Vec<Line<'static>> {
@@ -540,7 +545,7 @@ fn windowed_messages(
         return vec![];
     };
     windowed(
-        messages_to_lines(messages),
+        messages_to_lines(messages, thread_replies),
         visible_cols(area),
         visible_rows(area),
         scroll,
@@ -618,7 +623,17 @@ fn render_channel_list(
 /// All of a channel's messages, with a `YYYY-MM-DD` divider inserted (in the
 /// local timezone) wherever the calendar date changes — messages here can
 /// span weeks, and a bare `HH:MM` gives no way to tell which day is which.
-fn messages_to_lines(messages: &[&Message]) -> Vec<Line<'static>> {
+///
+/// A root message with replies (#60) gets a "N replies" marker right after
+/// its own lines, then — once cached in `thread_replies` — each reply
+/// indented underneath it. The server never includes replies in the main
+/// page at all (only a count, on the root), so without this a whole side
+/// of the conversation is invisible: it looked like the CLI was silently
+/// dropping messages, when it had just never asked for them.
+fn messages_to_lines(
+    messages: &[&Message],
+    thread_replies: &HashMap<String, Vec<Message>>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut last_date: Option<NaiveDate> = None;
 
@@ -629,9 +644,47 @@ fn messages_to_lines(messages: &[&Message]) -> Vec<Line<'static>> {
             last_date = Some(date);
         }
         lines.extend(message_lines(message));
+
+        if message.reply_count > 0 {
+            lines.push(reply_count_line(message.reply_count));
+            if let Some(replies) = thread_replies.get(&message.id) {
+                for reply in replies {
+                    lines.extend(indent_lines(message_lines(reply)));
+                }
+            }
+        }
     }
 
     lines
+}
+
+fn reply_count_line(reply_count: i64) -> Line<'static> {
+    let label = if reply_count == 1 {
+        "1 reply".to_string()
+    } else {
+        format!("{reply_count} replies")
+    };
+    Line::styled(
+        format!("  💬 {label}"),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
+    )
+}
+
+/// Marks `lines` as a thread reply, nested under its root: an arrow on the
+/// first line, aligned indentation on any that wrapped.
+fn indent_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let marker = if i == 0 { "  ↳ " } else { "    " };
+            let mut spans = vec![Span::raw(marker)];
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn date_divider(date: NaiveDate) -> Line<'static> {
@@ -910,6 +963,8 @@ mod tests {
                     preferences: None,
                 },
                 attachments: Vec::new(),
+                thread_root_id: None,
+                reply_count: 0,
             })
             .collect();
         state.on_messages_loaded("c1".to_string(), seq, Ok((messages, false)));
@@ -1170,6 +1225,57 @@ mod tests {
     }
 
     #[test]
+    fn a_root_with_replies_shows_a_reply_count_marker() {
+        let mut state = logged_in_state_with_messages(1);
+        logged_in_state_mut(&mut state)
+            .messages
+            .get_mut("c1")
+            .unwrap()[0]
+            .reply_count = 2;
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(
+            content.contains("2 replies"),
+            "the root's reply count should show even before the thread is fetched:\n{content}"
+        );
+    }
+
+    #[test]
+    fn cached_replies_render_indented_under_their_root() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.messages.get_mut("c1").unwrap()[0].reply_count = 1;
+            let reply = Message {
+                id: "reply1".to_string(),
+                kind: "user".to_string(),
+                system_event: None,
+                body: "<p>thank you</p>".to_string(),
+                created_at: Utc::now(),
+                deleted_at: None,
+                author: MessageAuthor {
+                    id: "u2".to_string(),
+                    name: "Christopher".to_string(),
+                    preferences: None,
+                },
+                attachments: Vec::new(),
+                thread_root_id: Some("m0".to_string()),
+                reply_count: 0,
+            };
+            logged_in
+                .thread_replies
+                .insert("m0".to_string(), vec![reply]);
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(content.contains("thank you"));
+        assert!(
+            content.contains("↳"),
+            "a reply should render indented under its root:\n{content}"
+        );
+    }
+
+    #[test]
     fn the_channel_list_shows_favorite_private_and_mention_markers() {
         let mut state = logged_in_state_with_messages(1);
         {
@@ -1304,13 +1410,15 @@ mod tests {
                 preferences: None,
             },
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         };
         let day1 = Utc.with_ymd_and_hms(2026, 9, 14, 10, 0, 0).unwrap();
         let day2 = Utc.with_ymd_and_hms(2026, 9, 16, 10, 0, 0).unwrap();
         let messages = [make("a", day1), make("b", day1), make("c", day2)];
         let messages: Vec<&Message> = messages.iter().collect();
 
-        let lines = messages_to_lines(&messages);
+        let lines = messages_to_lines(&messages, &HashMap::new());
         let divider_count = lines
             .iter()
             .filter(|line| line.spans.iter().any(|s| s.content.contains("──")))
@@ -1341,6 +1449,8 @@ mod tests {
                 preferences: None,
             },
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         };
 
         let rendered: String = message_lines(&message)
@@ -1401,6 +1511,8 @@ mod tests {
             deleted_at: None,
             author,
             attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
         };
         let messages = vec![
             msg(
