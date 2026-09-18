@@ -155,3 +155,6 @@
 {"at":"2026-09-18T14:09:56Z","id":61,"by":"Christopher Vachon","as":"user","type":"created","title":"Select and reply to a message thread","state":"In Progress"}
 {"at":"2026-09-18T14:19:55Z","id":61,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-18T14:19:55Z","id":61,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
+{"at":"2026-09-18T14:45:54Z","id":62,"by":"Christopher Vachon","as":"user","type":"created","title":"Hide soft-deleted messages from the message pane","state":"In Progress"}
+{"at":"2026-09-18T14:46:10Z","id":62,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-18T14:46:11Z","id":62,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
