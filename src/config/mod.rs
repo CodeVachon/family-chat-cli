@@ -28,15 +28,78 @@ pub struct Config {
     /// different server never collides with the wrong session).
     pub profile: Option<String>,
 
-    /// The channel to select on startup, matched by name. Not yet consumed
-    /// anywhere — there's no "jump to a named channel" behavior in the app
-    /// yet for this to feed.
-    #[allow(dead_code)]
+    /// The channel to select on startup, matched by name. Readable/writable
+    /// via `config get/set default-channel` (#37), but still not consumed
+    /// by the app itself — there's no "jump to a named channel on startup"
+    /// behavior yet for this to feed.
     pub default_channel: Option<String>,
     // Non-secret UI preferences (the plan's fourth category) are
     // deliberately not modeled yet — there isn't a concrete one to define a
     // shape for. Add a field (or a nested table) here when one exists;
     // `#[serde(default)]` above means that's additive too.
+}
+
+/// A single `Config` field, addressable by name for the `config
+/// get`/`set`/`unset` subcommands (#37) — keeps their key names (kebab-case,
+/// the usual CLI convention) decoupled from Rust's own field names.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigKey {
+    Server,
+    Profile,
+    #[value(name = "default-channel")]
+    DefaultChannel,
+}
+
+impl ConfigKey {
+    /// Every key, in the order `config get` (with no key given) prints
+    /// them.
+    pub const ALL: [ConfigKey; 3] = [
+        ConfigKey::Server,
+        ConfigKey::Profile,
+        ConfigKey::DefaultChannel,
+    ];
+
+    /// The kebab-case name this key is known by on the command line — kept
+    /// in sync by hand with the `#[value(name = ...)]` attributes above
+    /// (clap has no API to read those back) and pinned by a test.
+    pub fn name(self) -> &'static str {
+        match self {
+            ConfigKey::Server => "server",
+            ConfigKey::Profile => "profile",
+            ConfigKey::DefaultChannel => "default-channel",
+        }
+    }
+}
+
+impl Config {
+    /// The current value of `key`, if set.
+    pub fn get(&self, key: ConfigKey) -> Option<&str> {
+        match key {
+            ConfigKey::Server => self.server.as_deref(),
+            ConfigKey::Profile => self.profile.as_deref(),
+            ConfigKey::DefaultChannel => self.default_channel.as_deref(),
+        }
+    }
+
+    /// Sets `key` to `value`. Deliberately doesn't validate or save —
+    /// callers do both (see `main::run_config_command`), so a rejected
+    /// value is reported clearly and never gets written to disk.
+    pub fn set(&mut self, key: ConfigKey, value: String) {
+        match key {
+            ConfigKey::Server => self.server = Some(value),
+            ConfigKey::Profile => self.profile = Some(value),
+            ConfigKey::DefaultChannel => self.default_channel = Some(value),
+        }
+    }
+
+    /// Clears `key` back to unset.
+    pub fn unset(&mut self, key: ConfigKey) {
+        match key {
+            ConfigKey::Server => self.server = None,
+            ConfigKey::Profile => self.profile = None,
+            ConfigKey::DefaultChannel => self.default_channel = None,
+        }
+    }
 }
 
 impl Config {
@@ -138,10 +201,8 @@ fn load_from(path: &Path) -> anyhow::Result<Config> {
 }
 
 /// Validates and writes `config` to disk, creating the parent directory if
-/// needed. Not called anywhere yet — there's no way to edit the config
-/// short of hand-editing the file until #37 (setup/config commands) adds
-/// one.
-#[allow(dead_code)]
+/// needed. Used by the `config set`/`unset` subcommands (#37) — the only
+/// way to edit the config file short of hand-editing it.
 pub fn save(config: &Config) -> anyhow::Result<()> {
     save_to(config, &path()?)
 }
@@ -237,6 +298,55 @@ mod tests {
     #[test]
     fn a_config_with_no_optional_fields_set_validates_fine() {
         Config::default().validate().unwrap();
+    }
+
+    #[test]
+    fn get_returns_none_for_an_unset_field_and_some_once_set() {
+        let mut config = Config::default();
+        assert_eq!(config.get(ConfigKey::Server), None);
+
+        config.set(ConfigKey::Server, "https://chat.example.com".to_string());
+        assert_eq!(
+            config.get(ConfigKey::Server),
+            Some("https://chat.example.com")
+        );
+    }
+
+    #[test]
+    fn set_and_unset_round_trip_every_key() {
+        for (key, value) in [
+            (ConfigKey::Server, "https://chat.example.com"),
+            (ConfigKey::Profile, "work"),
+            (ConfigKey::DefaultChannel, "General"),
+        ] {
+            let mut config = Config::default();
+            config.set(key, value.to_string());
+            assert_eq!(config.get(key), Some(value));
+
+            config.unset(key);
+            assert_eq!(
+                config.get(key),
+                None,
+                "unset should clear {key:?} back to None"
+            );
+        }
+    }
+
+    #[test]
+    fn config_key_names_are_kebab_case_and_match_the_clap_value_names() {
+        // Pins the hand-kept sync between `ConfigKey::name` and each
+        // variant's `#[value(name = ...)]` attribute — clap has no API to
+        // read the attribute back, so this is the only thing that would
+        // catch the two drifting apart.
+        assert_eq!(ConfigKey::Server.name(), "server");
+        assert_eq!(ConfigKey::Profile.name(), "profile");
+        assert_eq!(ConfigKey::DefaultChannel.name(), "default-channel");
+        for key in ConfigKey::ALL {
+            assert_eq!(
+                clap::ValueEnum::to_possible_value(&key).unwrap().get_name(),
+                key.name()
+            );
+        }
     }
 
     #[test]

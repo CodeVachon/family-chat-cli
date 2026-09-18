@@ -49,6 +49,22 @@ precedence. A concise login/everyday-use walkthrough isn't written up yet
 Logs go to `$XDG_STATE_HOME/family-chat-cli/` (or `~/.local/state/...`) —
 never the terminal itself, since the TUI owns that.
 
+## Configuring
+
+Non-secret settings (`server`, `profile`, `default-channel`) live in a TOML
+file, editable without opening it by hand:
+
+```sh
+family-chat-cli config get                  # every value
+family-chat-cli config get server           # just one
+family-chat-cli config set server https://chat.example.com
+family-chat-cli config unset profile
+family-chat-cli config path                 # where the file lives
+```
+
+`set`/`unset` validate before saving — an invalid value (e.g. a non-`https`
+URL against a real host) is rejected and never written to disk.
+
 ## Developing
 
 ```sh

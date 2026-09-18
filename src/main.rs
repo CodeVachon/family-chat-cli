@@ -21,10 +21,18 @@ const DEFAULT_SERVER: &str = "https://chat.thevachonfamily.ca";
 const DEFAULT_PROFILE: &str = "default";
 
 fn main() -> anyhow::Result<()> {
+    let args = cli::Cli::parse();
+    if let Some(cli::Command::Config { action }) = args.command {
+        // A tiny, synchronous CLI utility, run and exited before any of the
+        // TUI's own setup — its output is meant to show up directly in the
+        // terminal, unlike the TUI itself, which never writes to
+        // stdout/stderr once it enables raw mode (see `init_logging`).
+        return run_config_command(action);
+    }
+
     let _log_guard = init_logging()?;
     install_panic_hook();
 
-    let args = cli::Cli::parse();
     let config = config::load()?;
     let server = resolve_server(args.server, config.server);
     let server_url =
@@ -65,6 +73,48 @@ fn resolve_server(cli_server: Option<String>, config_server: Option<String>) -> 
     cli_server
         .or(config_server)
         .unwrap_or_else(|| DEFAULT_SERVER.to_string())
+}
+
+/// The `config` subcommand (#37) — lets `server`/`profile`/`default-channel`
+/// be read or edited without hand-editing the TOML file. `set`/`unset` load
+/// the current file, apply the change, then save (which validates first —
+/// see `config::save` — so a rejected value is reported clearly and never
+/// written to disk).
+fn run_config_command(action: cli::ConfigAction) -> anyhow::Result<()> {
+    match action {
+        cli::ConfigAction::Path => {
+            println!("{}", config::path()?.display());
+        }
+        cli::ConfigAction::Get { key: Some(key) } => {
+            println!("{}", format_value(config::load()?.get(key)));
+        }
+        cli::ConfigAction::Get { key: None } => {
+            let config = config::load()?;
+            for key in config::ConfigKey::ALL {
+                println!("{} = {}", key.name(), format_value(config.get(key)));
+            }
+        }
+        cli::ConfigAction::Set { key, value } => {
+            let mut config = config::load()?;
+            config.set(key, value);
+            config::save(&config)?;
+            println!("{} = {}", key.name(), format_value(config.get(key)));
+        }
+        cli::ConfigAction::Unset { key } => {
+            let mut config = config::load()?;
+            config.unset(key);
+            config::save(&config)?;
+            println!("{} unset", key.name());
+        }
+    }
+    Ok(())
+}
+
+/// `(not set)` for an absent value rather than an empty line — a config
+/// with nothing configured yet should read as obviously empty, not blank
+/// (easy to mistake blank output for a rendering glitch).
+fn format_value(value: Option<&str>) -> &str {
+    value.unwrap_or("(not set)")
 }
 
 /// Logs go to a file: once the TUI enables raw mode and the alternate screen,
