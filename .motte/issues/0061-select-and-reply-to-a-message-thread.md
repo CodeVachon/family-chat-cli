@@ -5,7 +5,7 @@ state: Done
 parent: 6
 labels: [task, chat]
 created: 2026-09-18T14:09:56Z
-updated: 2026-09-18T14:19:55Z
+updated: 2026-09-18T14:34:50Z
 ---
 
 ## Description
@@ -25,3 +25,7 @@ Implemented exactly to spec: Right on an empty compose draft targets the last vi
 Verified live end-to-end against the real Testing channel through the actual TUI (tmux): entered thread mode on the newest message, moved selection up with arrows, typed and sent a reply, confirmed via curl (GET .../thread) that the reply landed with threadRootId correctly pointing at the targeted root, then confirmed Esc returned the UI to the normal Message/hint state.
 
 137 tests passing (added ~10 for state transitions + 2 render tests), clippy clean, fmt clean.
+
+### 2026-09-18T14:34:50Z — Christopher Vachon (user)
+
+Follow-up fix: a sent reply never showed up in the CLI (thread view or inline preview) until something else evicted the thread_replies cache, even though the reply count updated and the web app showed it instantly. Root cause: on_message_sent reloaded the plain message list (refreshing reply_count) but never invalidated the already-cached thread for that root. Fixed with a threads_pending_refresh flag set on a successful reply and consumed by mark_threads_loading, forcing threads_needing_fetch to re-fetch an already-cached thread. Verified live in Testing: a second reply to an already-cached thread now appears immediately in both views. See commit 27879db.
