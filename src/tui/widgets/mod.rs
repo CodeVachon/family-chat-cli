@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
-use crate::api::types::{Attachment, Channel, Message, MessageAuthor};
+use crate::api::types::{Attachment, Channel, Message, MessageAuthor, REACTION_EMOJIS, Reaction};
 use crate::app::AppState;
 use crate::app::state::{LoggedInFocus, LoggedInState, LoginField, LoginForm, Screen};
 use crate::text::html;
@@ -321,6 +321,7 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
                     windowed_messages(
                         visible_messages.as_deref(),
                         &state.thread_replies,
+                        state.reaction_target.as_deref(),
                         messages_area,
                         state.message_scroll,
                     )
@@ -353,6 +354,7 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
                     (Some(_), Some(_)) => windowed_messages(
                         visible_messages.as_deref(),
                         &state.thread_replies,
+                        state.reaction_target.as_deref(),
                         messages_area,
                         state.message_scroll,
                     ),
@@ -377,11 +379,13 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
         &state.send_error,
         state.sending,
         state.thread_reply_target.is_some(),
+        state.reaction_target.is_some(),
     ) {
-        (Some(_), _, _) => "Message — send failed".to_string(),
-        (None, true, _) => "Sending…".to_string(),
-        (None, false, true) => "Reply".to_string(),
-        (None, false, false) => "Message".to_string(),
+        (Some(_), _, _, _) => "Message — send failed".to_string(),
+        (None, true, _, _) => "Sending…".to_string(),
+        (None, false, true, _) => "Reply".to_string(),
+        (None, false, false, true) => "React".to_string(),
+        (None, false, false, false) => "Message".to_string(),
     };
     frame.render_widget(
         Paragraph::new(state.compose.as_str()).block(
@@ -406,13 +410,19 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     // a dedicated search box, and the hints aren't useful mid-search anyway.
     let searching = state.focus == LoggedInFocus::Search;
     let replying = state.thread_reply_target.is_some();
+    let reacting = state.reaction_target.is_some();
     let hint = if searching {
         format!("/{}", state.search_query)
     } else if replying {
         "Replying — \u{2191}/\u{2193} change message · Enter send · Esc cancel".to_string()
+    } else if reacting {
+        format!(
+            "Reacting — \u{2191}/\u{2193} change message · {} · Esc cancel",
+            reaction_picker_hint()
+        )
     } else {
         format!(
-            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · / search · \u{2192} reply · Enter send · r refresh · l logout · q quit",
+            "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · / search · \u{2190} react · \u{2192} reply · Enter send · r refresh · l logout · q quit",
             state.user.name
         )
     };
@@ -574,6 +584,7 @@ fn windowed<'a>(lines: Vec<Line<'a>>, width: usize, height: usize, scroll: usize
 fn windowed_messages(
     messages: Option<&[&Message]>,
     thread_replies: &HashMap<String, Vec<Message>>,
+    reaction_target: Option<&str>,
     area: Rect,
     scroll: usize,
 ) -> Vec<Line<'static>> {
@@ -581,11 +592,31 @@ fn windowed_messages(
         return vec![];
     };
     windowed(
-        messages_to_lines(messages, thread_replies),
+        messages_to_lines(messages, thread_replies, reaction_target),
         visible_cols(area),
         visible_rows(area),
         scroll,
     )
+}
+
+/// "1👍 2❤️ 3😂 4🎉 5😮 6😢 7🙏 8👀 9🔥 0✅" — the digit-to-emoji legend shown
+/// in the status line while reacting (#63), built from `REACTION_EMOJIS` so
+/// it can never drift out of sync with `AppState::digit_to_emoji_index`'s
+/// actual mapping.
+fn reaction_picker_hint() -> String {
+    REACTION_EMOJIS
+        .iter()
+        .enumerate()
+        .map(|(i, emoji)| {
+            let digit = if i == 9 {
+                '0'
+            } else {
+                (b'1' + i as u8) as char
+            };
+            format!("{digit}{emoji}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Parses a `"#rrggbb"` hex color (the server's channel color field) into a
@@ -666,9 +697,14 @@ fn render_channel_list(
 /// page at all (only a count, on the root), so without this a whole side
 /// of the conversation is invisible: it looked like the CLI was silently
 /// dropping messages, when it had just never asked for them.
+///
+/// `reaction_target`, when `Some`, marks that one message's lines (#63) so
+/// the message currently targeted for a reaction is visually
+/// distinguishable from the rest of the history.
 fn messages_to_lines(
     messages: &[&Message],
     thread_replies: &HashMap<String, Vec<Message>>,
+    reaction_target: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut last_date: Option<NaiveDate> = None;
@@ -679,7 +715,11 @@ fn messages_to_lines(
             lines.push(date_divider(date));
             last_date = Some(date);
         }
-        lines.extend(message_lines(message));
+        let mut own_lines = message_lines(message);
+        if reaction_target == Some(message.id.as_str()) {
+            own_lines = mark_reaction_target(own_lines);
+        }
+        lines.extend(own_lines);
 
         if message.reply_count > 0 {
             lines.push(reply_count_line(message.reply_count));
@@ -691,6 +731,24 @@ fn messages_to_lines(
         }
     }
 
+    lines
+}
+
+/// Prefixes the first line with a small marker (#63) — the same
+/// "yellow means currently acted on" idiom `focus_style` and the channel
+/// list's reversed selection already use elsewhere, applied here to a
+/// single message rather than a whole pane.
+fn mark_reaction_target(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if let Some(first) = lines.first_mut() {
+        let mut spans = vec![Span::styled(
+            "» ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )];
+        spans.extend(std::mem::take(&mut first.spans));
+        *first = Line::from(spans);
+    }
     lines
 }
 
@@ -802,7 +860,35 @@ fn message_lines(message: &Message) -> Vec<Line<'static>> {
     }
 
     lines.extend(message.attachments.iter().map(attachment_line));
+    if !message.reactions.is_empty() {
+        lines.push(reaction_summary_line(&message.reactions));
+    }
     lines
+}
+
+/// `emoji count` for every reaction on a message (#63), space-separated —
+/// one the current user added is styled to stand out (the same yellow
+/// `mark_reaction_target` uses), so a glance shows which of possibly
+/// several reactions is "mine" without re-reading each one.
+fn reaction_summary_line(reactions: &[Reaction]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(reactions.len() * 2);
+    for reaction in reactions {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        let style = if reaction.reacted_by_me {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(
+            format!("{} {}", reaction.emoji, reaction.count),
+            style,
+        ));
+    }
+    Line::from(spans)
 }
 
 /// A channel-membership event's description, rendered after the usual
@@ -990,7 +1076,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use crate::api::types::{Channel, ChannelMember, Message, MessageAuthor, User};
+    use crate::api::types::{Channel, ChannelMember, Message, MessageAuthor, Reaction, User};
     use crate::app::{AppState, Command};
 
     fn logged_in_state_with_messages(count: usize) -> AppState {
@@ -1032,6 +1118,7 @@ mod tests {
                 attachments: Vec::new(),
                 thread_root_id: None,
                 reply_count: 0,
+                reactions: Vec::new(),
             })
             .collect();
         state.on_messages_loaded("c1".to_string(), seq, Ok((messages, false)));
@@ -1363,6 +1450,7 @@ mod tests {
                 attachments: Vec::new(),
                 thread_root_id: Some("m0".to_string()),
                 reply_count: 0,
+                reactions: Vec::new(),
             };
             logged_in
                 .thread_replies
@@ -1426,6 +1514,7 @@ mod tests {
                 attachments: Vec::new(),
                 thread_root_id: Some("m0".to_string()),
                 reply_count: 0,
+                reactions: Vec::new(),
             };
             logged_in
                 .thread_replies
@@ -1435,6 +1524,63 @@ mod tests {
         let content = render_to_text(&state, 110, 15);
         assert!(content.contains("Replies:"));
         assert!(content.contains("thank you"));
+    }
+
+    #[test]
+    fn a_messages_reactions_render_as_emoji_and_count() {
+        let mut state = logged_in_state_with_messages(1);
+        logged_in_state_mut(&mut state)
+            .messages
+            .get_mut("c1")
+            .unwrap()[0]
+            .reactions = vec![
+            Reaction {
+                emoji: "👍".to_string(),
+                count: 2,
+                reacted_by_me: false,
+            },
+            Reaction {
+                emoji: "🎉".to_string(),
+                count: 1,
+                reacted_by_me: true,
+            },
+        ];
+
+        let content = render_to_text(&state, 110, 15);
+        // A wide-glyph emoji occupies two terminal cells but only carries
+        // its own symbol in the first — `TestBackend`'s buffer leaves the
+        // second as a literal space, so reading it back cell-by-cell can
+        // double up whitespace around it even though a real terminal
+        // renders it as one glyph plus one space. Collapse runs of
+        // whitespace before asserting so this test isn't tied to that
+        // rendering detail.
+        let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(normalized.contains("👍 2"), "missing reaction:\n{content}");
+        assert!(normalized.contains("🎉 1"), "missing reaction:\n{content}");
+    }
+
+    #[test]
+    fn reaction_mode_marks_the_targeted_message_and_updates_the_compose_and_hint() {
+        let mut state = logged_in_state_with_messages(3);
+        logged_in_state_mut(&mut state).reaction_target = Some("m2".to_string());
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(
+            content.contains("» ") && content.contains("msg-2"),
+            "the targeted message should be marked:\n{content}"
+        );
+        assert!(
+            content.contains("React"),
+            "the compose box should say React while targeting a message:\n{content}"
+        );
+        assert!(
+            content.contains("Reacting"),
+            "the status line should show the reaction picker hint:\n{content}"
+        );
+        assert!(
+            content.contains('👍'),
+            "the emoji legend should show:\n{content}"
+        );
     }
 
     #[test]
@@ -1574,13 +1720,14 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         };
         let day1 = Utc.with_ymd_and_hms(2026, 9, 14, 10, 0, 0).unwrap();
         let day2 = Utc.with_ymd_and_hms(2026, 9, 16, 10, 0, 0).unwrap();
         let messages = [make("a", day1), make("b", day1), make("c", day2)];
         let messages: Vec<&Message> = messages.iter().collect();
 
-        let lines = messages_to_lines(&messages, &HashMap::new());
+        let lines = messages_to_lines(&messages, &HashMap::new(), None);
         let divider_count = lines
             .iter()
             .filter(|line| line.spans.iter().any(|s| s.content.contains("──")))
@@ -1613,6 +1760,7 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         };
 
         let rendered: String = message_lines(&message)
@@ -1675,6 +1823,7 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         };
         let messages = vec![
             msg(

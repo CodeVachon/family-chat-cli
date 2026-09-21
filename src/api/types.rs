@@ -117,6 +117,28 @@ pub struct Attachment {
     pub original_filename: Option<String>,
 }
 
+/// One distinct emoji's aggregate on a message (#63) — the server groups the
+/// raw per-user reactions table by emoji before sending
+/// (`aggregateReactions` in the backend's apps/web/lib/queries/channels.ts),
+/// so this is already a count, not a list of who reacted. `reacted_by_me`
+/// is what lets the CLI render a plain toggle rather than track reacted
+/// state itself.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Reaction {
+    pub emoji: String,
+    pub count: i64,
+    #[serde(rename = "reactedByMe")]
+    pub reacted_by_me: bool,
+}
+
+/// The only emoji the server accepts for a reaction (`REACTION_EMOJIS` in
+/// the backend's apps/web/lib/validation/channel.ts) — anything else is
+/// rejected with a 422 from `PUT /messages/:id/reactions/:emoji`. Order
+/// matches the digit each maps to in the TUI's reaction picker (1-9, then
+/// 0) — not alphabetical or any server-side ordering.
+pub const REACTION_EMOJIS: [&str; 10] =
+    ["👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👀", "🔥", "✅"];
+
 /// Present (with `kind == "system"`) on channel events — joins, leaves,
 /// additions/removals by another member, renames, and so on. `body` is
 /// empty for these; the renderer builds its text from this instead (#58).
@@ -158,6 +180,11 @@ pub struct Message {
     /// separately per thread (`ApiClient::thread`) to ever be seen at all.
     #[serde(rename = "replyCount", default)]
     pub reply_count: i64,
+    /// Empty when nobody's reacted — the server always sends the field,
+    /// but `#[serde(default)]` keeps a hand-written test/mock payload that
+    /// predates this field parsing too (#63).
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -230,6 +257,25 @@ pub enum RealtimeEvent {
     MessageDeleted {
         #[serde(rename = "channelId")]
         channel_id: String,
+    },
+    /// A reaction was added or removed somewhere in `channel_id` (#63) —
+    /// confirmed against the backend's `message_reactions_notify` Postgres
+    /// trigger (packages/db/drizzle/0007_reaction_trigger.sql in the
+    /// family-chat repo), which fires this exact shape:
+    /// `{"type":"reaction.changed","channelId":...,"messageId":...,"ts":...}`.
+    /// There's no REST "list reactions" endpoint — a message's reactions
+    /// only ever arrive embedded in it (`GET /channels/:id/messages`'s
+    /// `reactions` field), so reacting to this means reloading messages,
+    /// the same as `MessageUpdated`. `message_id` isn't otherwise used: it
+    /// could name a thread reply, which a plain reload never touches (only
+    /// top-level messages come back from that endpoint) — see
+    /// `AppState::on_realtime_event`'s handling of this variant.
+    #[serde(rename = "reaction.changed")]
+    ReactionChanged {
+        #[serde(rename = "channelId")]
+        channel_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
     },
     #[serde(other)]
     Other,

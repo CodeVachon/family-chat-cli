@@ -46,6 +46,11 @@ pub enum Event {
         root_id: String,
         result: Result<Vec<Message>, ApiError>,
     },
+    /// The response to a `Command::ToggleReaction` (#63).
+    ReactionToggled {
+        channel_id: String,
+        result: Result<(), ApiError>,
+    },
     Realtime(RealtimeEvent),
 }
 
@@ -82,6 +87,18 @@ pub enum Command {
         /// `POST .../messages` and creates a real reply (round-tripped
         /// through `GET .../thread` to verify).
         thread_root_id: Option<String>,
+    },
+    /// Adds or removes `emoji` from the current user's reaction on
+    /// `message_id` (#63) — `add: false` is a removal. The state layer
+    /// decides which based on that message's cached `reactedByMe` for this
+    /// emoji, so at worst a stale race (someone else reacts to the same
+    /// message in between) just mirrors what was already cached, never
+    /// anything worse.
+    ToggleReaction {
+        channel_id: String,
+        message_id: String,
+        emoji: String,
+        add: bool,
     },
     Logout,
     Quit,

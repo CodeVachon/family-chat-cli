@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::api::ApiError;
-use crate::api::types::{Channel, ChannelMember, Message, RealtimeEvent, User};
+use crate::api::types::{Channel, ChannelMember, Message, REACTION_EMOJIS, RealtimeEvent, User};
 
 use super::event::Command;
 
@@ -123,6 +123,19 @@ pub struct LoggedInState {
     /// switching channels. `Some` also switches the messages pane over to
     /// showing just that message's thread (see `tui::widgets`).
     pub thread_reply_target: Option<String>,
+    /// The message currently targeted for a reaction (#63) — entered from
+    /// `Compose` focus with Left on an empty draft (mirroring Right for
+    /// `thread_reply_target`), moved with Up/Down, cleared with Esc or by
+    /// switching channels. Mutually exclusive with `thread_reply_target`
+    /// (each mode's entry key only fires when the other isn't already
+    /// active) — unlike replying, targeting a message to react to doesn't
+    /// change what the messages pane shows, only which message renders
+    /// highlighted (see `tui::widgets`).
+    pub reaction_target: Option<String>,
+    /// The last reaction toggle's failure, if any (mirrors `send_error`) —
+    /// shown as a short marker on the messages pane title, the same
+    /// pane-local convention (#26) `messages_error`/`send_error` follow.
+    pub reaction_error: Option<String>,
 }
 
 impl LoggedInState {
@@ -152,6 +165,8 @@ impl LoggedInState {
             threads_loading: HashSet::new(),
             threads_pending_refresh: HashSet::new(),
             thread_reply_target: None,
+            reaction_target: None,
+            reaction_error: None,
         }
     }
 
@@ -212,8 +227,19 @@ impl LoggedInState {
             .find(|m| m.id == target)
     }
 
-    /// The initial thread-reply target on a bare Right arrow (#61) — the
-    /// most recent (last) currently visible message.
+    /// The message currently targeted for a reaction (#63), resolved from
+    /// `reaction_target` against `visible_messages` — used by
+    /// `tui::widgets` to highlight it, and by `on_compose_key` to look up
+    /// which emoji are already reacted before toggling one.
+    pub fn reaction_target_message(&self) -> Option<&Message> {
+        let target = self.reaction_target.as_deref()?;
+        self.visible_messages()?
+            .into_iter()
+            .find(|m| m.id == target)
+    }
+
+    /// The initial target on a bare Right/Left arrow (#61/#63) — the most
+    /// recent (last) currently visible message.
     fn last_visible_message_id(&self) -> Option<String> {
         self.visible_messages()?.last().map(|m| m.id.clone())
     }
@@ -223,17 +249,43 @@ impl LoggedInState {
     /// newest message straight back to the oldest on a single arrow press
     /// would be disorienting in a channel with any real history.
     fn move_thread_selection(&mut self, delta: isize) {
-        let Some(current) = self.thread_reply_target.clone() else {
+        let ids = self.visible_message_ids();
+        Self::move_target(&mut self.thread_reply_target, &ids, delta);
+    }
+
+    /// Moves `reaction_target` by `delta` within `visible_messages` (#63) —
+    /// same clamped-not-wrapping behavior as `move_thread_selection`.
+    fn move_reaction_selection(&mut self, delta: isize) {
+        let ids = self.visible_message_ids();
+        Self::move_target(&mut self.reaction_target, &ids, delta);
+    }
+
+    /// Owned copies of `visible_messages`' ids, in order — `move_target`
+    /// needs to mutably borrow a field of `self` while also indexing
+    /// through this list, which an `Option<&Message>` borrowed from `self`
+    /// wouldn't allow at the same time.
+    fn visible_message_ids(&self) -> Vec<String> {
+        self.visible_messages()
+            .into_iter()
+            .flatten()
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    /// The shared clamped-index math behind `move_thread_selection` and
+    /// `move_reaction_selection` — a no-op if `target` isn't currently set
+    /// to one of `visible_ids` (can't happen in practice, since both
+    /// callers only move an already-set target, but cheaper to handle than
+    /// to prove impossible).
+    fn move_target(target: &mut Option<String>, visible_ids: &[String], delta: isize) {
+        let Some(current) = target.clone() else {
             return;
         };
-        let Some(visible) = self.visible_messages() else {
+        let Some(index) = visible_ids.iter().position(|id| *id == current) else {
             return;
         };
-        let Some(index) = visible.iter().position(|m| m.id == current) else {
-            return;
-        };
-        let new_index = (index as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
-        self.thread_reply_target = Some(visible[new_index].id.clone());
+        let new_index = (index as isize + delta).clamp(0, visible_ids.len() as isize - 1) as usize;
+        *target = Some(visible_ids[new_index].clone());
     }
 
     /// Builds a `LoadMessages` command and records it as the latest
@@ -415,6 +467,7 @@ impl AppState {
                     state.selected -= 1;
                     state.message_scroll = 0;
                     state.thread_reply_target = None;
+                    state.reaction_target = None;
                     return Self::load_selected(state);
                 }
                 None
@@ -425,6 +478,7 @@ impl AppState {
                     state.selected += 1;
                     state.message_scroll = 0;
                     state.thread_reply_target = None;
+                    state.reaction_target = None;
                     return Self::load_selected(state);
                 }
                 None
@@ -495,6 +549,55 @@ impl AppState {
                 state.message_scroll = 0;
                 None
             }
+            // Left mirrors Right: targets a message to react to instead of
+            // reply to (#63). Guarded the same way — only fires on an
+            // empty draft, and only while neither mode is already active —
+            // so it never shadows ordinary typing or collides with
+            // thread-reply mode.
+            KeyCode::Left
+                if state.compose.is_empty()
+                    && state.reaction_target.is_none()
+                    && state.thread_reply_target.is_none() =>
+            {
+                state.reaction_target = state.last_visible_message_id();
+                None
+            }
+            KeyCode::Up if state.reaction_target.is_some() => {
+                state.move_reaction_selection(-1);
+                None
+            }
+            KeyCode::Down if state.reaction_target.is_some() => {
+                state.move_reaction_selection(1);
+                None
+            }
+            KeyCode::Esc if state.reaction_target.is_some() => {
+                state.reaction_target = None;
+                state.reaction_error = None;
+                None
+            }
+            // A digit 1-9 (then 0 for the tenth) toggles the matching
+            // `REACTION_EMOJIS` entry on the targeted message — a plain
+            // toggle, decided from that message's own cached `reactedByMe`
+            // rather than tracked separately, so it can never drift from
+            // what's actually shown.
+            KeyCode::Char(c) if state.reaction_target.is_some() && c.is_ascii_digit() => {
+                let emoji = REACTION_EMOJIS[Self::digit_to_emoji_index(c)?];
+                let message_id = state.reaction_target.clone()?;
+                let channel_id = state.selected_channel()?.id.clone();
+                let already_reacted = state.reaction_target_message().is_some_and(|message| {
+                    message
+                        .reactions
+                        .iter()
+                        .any(|r| r.emoji == emoji && r.reacted_by_me)
+                });
+                state.reaction_error = None;
+                Some(Command::ToggleReaction {
+                    channel_id,
+                    message_id,
+                    emoji: emoji.to_string(),
+                    add: !already_reacted,
+                })
+            }
             KeyCode::Char(c) => {
                 state.compose.push(c);
                 state.send_error = None;
@@ -517,6 +620,17 @@ impl AppState {
                     thread_root_id: state.thread_reply_target.clone(),
                 })
             }
+            _ => None,
+        }
+    }
+
+    /// `'1'..='9'` map to `REACTION_EMOJIS[0..=8]`, `'0'` maps to index 9 —
+    /// the usual "0 comes after 9" ordering on a keyboard row, so the
+    /// digit-to-emoji mapping matches what's printed above each key.
+    fn digit_to_emoji_index(c: char) -> Option<usize> {
+        match c {
+            '1'..='9' => Some(c as usize - '1' as usize),
+            '0' => Some(9),
             _ => None,
         }
     }
@@ -756,6 +870,31 @@ impl AppState {
         }
     }
 
+    /// The response to a `Command::ToggleReaction` (#63). Same
+    /// force-a-reload-rather-than-splice reasoning as `on_message_sent` —
+    /// the PUT/DELETE response doesn't carry the message's full decorated
+    /// shape either, so a refetch is what actually shows the new count and
+    /// `reactedByMe` state.
+    pub fn on_reaction_toggled(
+        &mut self,
+        channel_id: String,
+        result: Result<(), ApiError>,
+    ) -> Option<Command> {
+        let Screen::LoggedIn(state) = &mut self.screen else {
+            return None;
+        };
+        match result {
+            Ok(()) => {
+                state.reaction_error = None;
+                Some(state.request_messages(channel_id))
+            }
+            Err(error) => {
+                state.reaction_error = Some(format!("Couldn't update reaction: {error}"));
+                None
+            }
+        }
+    }
+
     /// The response to a members fetch that rode along with a
     /// `LoadMessages` (#50, see `Event::MembersLoaded`'s doc comment).
     pub fn on_members_loaded(
@@ -891,6 +1030,27 @@ impl AppState {
                     None
                 }
             }
+            // `message_id` isn't checked against anything cached — it could
+            // name a top-level message (the reload below refreshes it) or a
+            // thread reply (which a plain reload never touches at all, only
+            // top-level messages come back from that endpoint). There's no
+            // cheap message-id -> thread-root lookup, so every currently
+            // cached thread in this channel is marked stale too; harmless
+            // overhead given how few threads are typically open on screen
+            // at once, and it reuses the same `threads_pending_refresh`
+            // machinery a locally-sent reply already relies on (#61).
+            RealtimeEvent::ReactionChanged {
+                channel_id,
+                message_id: _,
+            } => {
+                if state.selected_channel().is_some_and(|c| c.id == channel_id) {
+                    let cached_roots: Vec<String> = state.thread_replies.keys().cloned().collect();
+                    state.threads_pending_refresh.extend(cached_roots);
+                    Some(state.request_messages(channel_id))
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -900,7 +1060,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::api::types::MessageAuthor;
+    use crate::api::types::{MessageAuthor, Reaction};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -1090,6 +1250,7 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         };
         state.on_messages_loaded("c1".to_string(), 1, Ok((vec![existing], false)));
 
@@ -1309,6 +1470,7 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         }
     }
 
@@ -1317,6 +1479,259 @@ mod tests {
             reply_count,
             ..message_with(id, "Louise", "<p>root</p>")
         }
+    }
+
+    fn message_with_reaction(id: &str, emoji: &str, count: i64, reacted_by_me: bool) -> Message {
+        Message {
+            reactions: vec![Reaction {
+                emoji: emoji.to_string(),
+                count,
+                reacted_by_me,
+            }],
+            ..message_with(id, "Louise", "<p>hi</p>")
+        }
+    }
+
+    #[test]
+    fn left_arrow_on_empty_compose_enters_reaction_mode_targeting_the_last_message() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![
+                    message_with("m1", "Chris", "<p>first</p>"),
+                    message_with("m2", "Rachel", "<p>second</p>"),
+                ],
+                false,
+            )),
+        );
+        state.on_key(key(KeyCode::Tab)); // focus Compose
+
+        assert!(state.on_key(key(KeyCode::Left)).is_none());
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_target, Some("m2".to_string()));
+    }
+
+    #[test]
+    fn left_arrow_is_ignored_once_compose_has_text() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Char('h')));
+        state.on_key(key(KeyCode::Left));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_target, None);
+    }
+
+    #[test]
+    fn thread_reply_mode_and_reaction_mode_are_mutually_exclusive() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // enters thread-reply mode
+        state.on_key(key(KeyCode::Left)); // must not also enter reaction mode
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(logged_in.thread_reply_target.is_some());
+        assert_eq!(logged_in.reaction_target, None);
+    }
+
+    #[test]
+    fn up_and_down_move_the_reaction_selection_while_in_reaction_mode() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((
+                vec![
+                    message_with("m1", "Chris", "<p>first</p>"),
+                    message_with("m2", "Rachel", "<p>second</p>"),
+                    message_with("m3", "Chris", "<p>third</p>"),
+                ],
+                false,
+            )),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Left)); // targets m3
+
+        state.on_key(key(KeyCode::Up)); // older -> m2
+        {
+            let Screen::LoggedIn(logged_in) = &state.screen else {
+                panic!("expected LoggedIn");
+            };
+            assert_eq!(logged_in.reaction_target, Some("m2".to_string()));
+        }
+        state.on_key(key(KeyCode::Down)); // newer -> m3
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_target, Some("m3".to_string()));
+    }
+
+    #[test]
+    fn escape_exits_reaction_mode() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Left));
+        state.on_key(key(KeyCode::Esc));
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_target, None);
+    }
+
+    #[test]
+    fn switching_channels_exits_reaction_mode() {
+        let mut state = logged_in_with_channels(["General", "Random"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Left));
+        state.on_key(key(KeyCode::Tab)); // back to Channels focus
+        state.on_key(key(KeyCode::Down)); // switch to "Random"
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_target, None);
+    }
+
+    #[test]
+    fn a_digit_adds_a_reaction_the_target_does_not_already_have() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Left)); // targets m1
+
+        let command = state.on_key(key(KeyCode::Char('1')));
+        match command {
+            Some(Command::ToggleReaction {
+                channel_id,
+                message_id,
+                emoji,
+                add,
+            }) => {
+                assert_eq!(channel_id, "c1");
+                assert_eq!(message_id, "m1");
+                assert_eq!(emoji, REACTION_EMOJIS[0]);
+                assert!(add, "not yet reacted, so this should add the reaction");
+            }
+            other => panic!("expected ToggleReaction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_digit_removes_a_reaction_the_target_already_has() {
+        let mut state = logged_in_with_channels(["General"]);
+        let reacted = message_with_reaction("m1", REACTION_EMOJIS[0], 1, true);
+        state.on_messages_loaded("c1".to_string(), 1, Ok((vec![reacted], false)));
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Left)); // targets m1
+
+        let command = state.on_key(key(KeyCode::Char('1')));
+        match command {
+            Some(Command::ToggleReaction { add, .. }) => {
+                assert!(!add, "already reacted, so this should remove it");
+            }
+            other => panic!("expected ToggleReaction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_digit_zero_maps_to_the_tenth_emoji() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Left));
+
+        let command = state.on_key(key(KeyCode::Char('0')));
+        match command {
+            Some(Command::ToggleReaction { emoji, .. }) => {
+                assert_eq!(emoji, REACTION_EMOJIS[9]);
+            }
+            other => panic!("expected ToggleReaction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn digits_are_typed_as_ordinary_compose_text_outside_reaction_mode() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_key(key(KeyCode::Tab));
+        assert!(state.on_key(key(KeyCode::Char('1'))).is_none());
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.compose, "1");
+    }
+
+    #[test]
+    fn on_reaction_toggled_success_reloads_messages_and_clears_the_error() {
+        let mut state = logged_in_with_channels(["General"]);
+        {
+            let Screen::LoggedIn(logged_in) = &mut state.screen else {
+                panic!("expected LoggedIn");
+            };
+            logged_in.reaction_error = Some("stale error".to_string());
+        }
+
+        let command = state.on_reaction_toggled("c1".to_string(), Ok(()));
+
+        assert!(
+            matches!(command, Some(Command::LoadMessages { channel_id, .. }) if channel_id == "c1")
+        );
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_error, None);
+    }
+
+    #[test]
+    fn on_reaction_toggled_failure_surfaces_an_error_and_issues_no_command() {
+        let mut state = logged_in_with_channels(["General"]);
+
+        let command =
+            state.on_reaction_toggled("c1".to_string(), Err(ApiError::Server("boom".to_string())));
+
+        assert!(command.is_none());
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(logged_in.reaction_error.is_some());
     }
 
     #[test]
@@ -1848,6 +2263,7 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         }];
         state.on_older_messages_loaded("c1".to_string(), Ok((older, false)));
 
@@ -1888,6 +2304,7 @@ mod tests {
                 attachments: Vec::new(),
                 thread_root_id: None,
                 reply_count: 0,
+                reactions: Vec::new(),
             })
             .collect();
         older.push(Message {
@@ -1905,6 +2322,7 @@ mod tests {
             attachments: Vec::new(),
             thread_root_id: None,
             reply_count: 0,
+            reactions: Vec::new(),
         });
         state.on_older_messages_loaded("c1".to_string(), Ok((older, false)));
 
@@ -1989,6 +2407,7 @@ mod tests {
                 attachments: Vec::new(),
                 thread_root_id: None,
                 reply_count: 0,
+                reactions: Vec::new(),
             })
             .collect();
         state.on_messages_loaded("c1".to_string(), seq, Ok((messages, has_more)));

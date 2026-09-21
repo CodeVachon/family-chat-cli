@@ -97,6 +97,9 @@ async fn run_app(
                     state.on_thread_loaded(root_id, result);
                     None
                 }
+                Some(Event::ReactionToggled { channel_id, result }) => {
+                    state.on_reaction_toggled(channel_id, result)
+                }
                 Some(Event::Realtime(event)) => state.on_realtime_event(event),
                 None => None,
             },
@@ -163,6 +166,21 @@ async fn run_app(
                         channel_id,
                         body,
                         thread_root_id,
+                    );
+                }
+                Command::ToggleReaction {
+                    channel_id,
+                    message_id,
+                    emoji,
+                    add,
+                } => {
+                    spawn_toggle_reaction(
+                        client.clone(),
+                        tx.clone(),
+                        channel_id,
+                        message_id,
+                        emoji,
+                        add,
                     );
                 }
                 Command::Logout => {
@@ -276,6 +294,25 @@ fn spawn_send_message(
             .await;
         log_if_err("send message", &result);
         let _ = tx.send(Event::MessageSent { channel_id, result });
+    });
+}
+
+fn spawn_toggle_reaction(
+    client: ApiClient,
+    tx: mpsc::UnboundedSender<Event>,
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+    add: bool,
+) {
+    tokio::spawn(async move {
+        let result = if add {
+            client.add_reaction(&message_id, &emoji).await
+        } else {
+            client.remove_reaction(&message_id, &emoji).await
+        };
+        log_if_err("toggle reaction", &result);
+        let _ = tx.send(Event::ReactionToggled { channel_id, result });
     });
 }
 

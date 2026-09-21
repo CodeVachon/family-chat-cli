@@ -193,6 +193,47 @@ impl ApiClient {
         }
     }
 
+    /// `PUT /messages/:id/reactions/:emoji` — adds `emoji` from the current
+    /// user to `message_id` (#63). Idempotent server-side
+    /// (`onConflictDoNothing` in the backend), so calling it again while
+    /// already reacted is a harmless no-op, not an error. `emoji` is a raw
+    /// multi-byte UTF-8 character (one of `types::REACTION_EMOJIS`), not
+    /// percent-encoded by hand — `reqwest`'s URL parsing already
+    /// percent-encodes non-ASCII path segments, confirmed by
+    /// `add_reaction_percent_encodes_the_emoji_in_the_url` below.
+    pub async fn add_reaction(&self, message_id: &str, emoji: &str) -> Result<(), ApiError> {
+        let response = self
+            .authed(
+                self.http
+                    .put(self.url(&format!("/api/v1/messages/{message_id}/reactions/{emoji}"))),
+            )
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::from_response(response).await)
+        }
+    }
+
+    /// `DELETE /messages/:id/reactions/:emoji` — removes the current user's
+    /// `emoji` from `message_id` (#63). A no-op (204) if they hadn't
+    /// reacted with it.
+    pub async fn remove_reaction(&self, message_id: &str, emoji: &str) -> Result<(), ApiError> {
+        let response = self
+            .authed(
+                self.http
+                    .delete(self.url(&format!("/api/v1/messages/{message_id}/reactions/{emoji}"))),
+            )
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::from_response(response).await)
+        }
+    }
+
     /// `GET /channels/:id/messages/:messageId/thread` — the whole thread in
     /// one response, root message included, no pagination (see
     /// docs/api-contract.md). Callers filter on `thread_root_id` to tell
@@ -417,6 +458,63 @@ mod tests {
             .map(|m| m.id.as_str())
             .collect();
         assert_eq!(replies, ["reply1", "reply2"]);
+    }
+
+    /// `reqwest`/`url` percent-encode a non-ASCII path segment automatically
+    /// when parsing the request URL string — this pins that down rather
+    /// than assuming it, since a raw emoji reaching the wire unencoded (or
+    /// mangled) would fail against the real server with no obvious local
+    /// symptom. Confirmed directly (`url::Url::parse` on a URL string with
+    /// a raw 👍 in the path yields `.../%F0%9F%91%8D`) — the mock's own
+    /// `path()` matcher compares literal wire bytes, not the decoded path,
+    /// so it has to name the percent-encoded form here, not the emoji
+    /// itself.
+    #[tokio::test]
+    async fn add_reaction_percent_encodes_the_emoji_in_the_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/messages/m1/reactions/%F0%9F%91%8D"))
+            .and(header("Authorization", "Bearer tok_abc123"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "reacted": true
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        client.set_token(Some("tok_abc123".to_string()));
+
+        client.add_reaction("m1", "👍").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_reaction_sends_a_delete_and_treats_204_as_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/v1/messages/m1/reactions/%F0%9F%91%8D"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        client.remove_reaction("m1", "👍").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn add_reaction_surfaces_the_servers_own_error_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/messages/m1/reactions/%F0%9F%91%8D"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "error": { "message": "Invalid reaction" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ApiClient::new(server.uri());
+        let error = client.add_reaction("m1", "👍").await.unwrap_err();
+
+        assert_eq!(error.to_string(), "Invalid reaction");
     }
 
     #[tokio::test]
