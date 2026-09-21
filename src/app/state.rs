@@ -233,15 +233,43 @@ impl LoggedInState {
     /// which emoji are already reacted before toggling one.
     pub fn reaction_target_message(&self) -> Option<&Message> {
         let target = self.reaction_target.as_deref()?;
-        self.visible_messages()?
+        self.reactable_messages()
             .into_iter()
             .find(|m| m.id == target)
     }
 
-    /// The initial target on a bare Right/Left arrow (#61/#63) — the most
-    /// recent (last) currently visible message.
+    /// The messages currently eligible for reacting to (#63): the targeted
+    /// thread's root plus its cached replies while thread-reply mode is
+    /// active (#61), or the plain channel history otherwise — whichever
+    /// the messages pane is actually showing right now. This is what lets
+    /// reacting work the same way inside an open thread as it does in the
+    /// normal view, rather than only ever reaching top-level messages.
+    fn reactable_messages(&self) -> Vec<&Message> {
+        if let Some(target) = self.thread_reply_target_message() {
+            let mut messages = vec![target];
+            if let Some(replies) = self.thread_replies.get(&target.id) {
+                messages.extend(replies.iter());
+            }
+            messages
+        } else {
+            self.visible_messages().unwrap_or_default()
+        }
+    }
+
+    /// The initial thread-reply target on a bare Right arrow (#61) — the
+    /// most recent (last) currently visible top-level message. Always
+    /// keyed off `visible_messages`, not `reactable_messages`: Right's job
+    /// is picking which top-level message to open as a thread, never
+    /// which message within an already-open one.
     fn last_visible_message_id(&self) -> Option<String> {
         self.visible_messages()?.last().map(|m| m.id.clone())
+    }
+
+    /// The initial reaction target on a bare Left arrow (#63) — the last
+    /// message in whatever's currently reactable (see `reactable_messages`
+    /// for why that adapts to thread-reply mode).
+    fn last_reactable_message_id(&self) -> Option<String> {
+        self.reactable_messages().last().map(|m| m.id.clone())
     }
 
     /// Moves `thread_reply_target` by `delta` within `visible_messages`
@@ -249,23 +277,26 @@ impl LoggedInState {
     /// newest message straight back to the oldest on a single arrow press
     /// would be disorienting in a channel with any real history.
     fn move_thread_selection(&mut self, delta: isize) {
-        let ids = self.visible_message_ids();
+        let ids = Self::message_ids(self.visible_messages());
         Self::move_target(&mut self.thread_reply_target, &ids, delta);
     }
 
-    /// Moves `reaction_target` by `delta` within `visible_messages` (#63) —
-    /// same clamped-not-wrapping behavior as `move_thread_selection`.
+    /// Moves `reaction_target` by `delta` within `reactable_messages`
+    /// (#63) — same clamped-not-wrapping behavior as
+    /// `move_thread_selection`, but over whichever list is currently
+    /// reactable (the open thread's messages, if any, else the plain
+    /// channel history).
     fn move_reaction_selection(&mut self, delta: isize) {
-        let ids = self.visible_message_ids();
+        let ids = Self::message_ids(Some(self.reactable_messages()));
         Self::move_target(&mut self.reaction_target, &ids, delta);
     }
 
-    /// Owned copies of `visible_messages`' ids, in order — `move_target`
-    /// needs to mutably borrow a field of `self` while also indexing
-    /// through this list, which an `Option<&Message>` borrowed from `self`
+    /// Owned copies of `messages`' ids, in order — `move_target` needs to
+    /// mutably borrow a field of `self` while also indexing through this
+    /// list, which a borrowed `Vec<&Message>` tied to `self`'s lifetime
     /// wouldn't allow at the same time.
-    fn visible_message_ids(&self) -> Vec<String> {
-        self.visible_messages()
+    fn message_ids(messages: Option<Vec<&Message>>) -> Vec<String> {
+        messages
             .into_iter()
             .flatten()
             .map(|m| m.id.clone())
@@ -533,7 +564,41 @@ impl AppState {
         match key.code {
             KeyCode::Right if state.compose.is_empty() && state.thread_reply_target.is_none() => {
                 state.thread_reply_target = state.last_visible_message_id();
+                // Any reaction target from before belonged to a different
+                // list (the plain channel, or a different thread entirely)
+                // — never carry it into the thread just opened (#63).
+                state.reaction_target = None;
                 state.message_scroll = 0;
+                None
+            }
+            // Left targets a message to react to instead of reply to
+            // (#63) — independent of thread-reply mode, so it works both
+            // in the plain channel view and inside an already-open thread
+            // (reacting to its root or one of its cached replies). Only
+            // guarded on an empty draft and no reaction already targeted,
+            // so it never shadows ordinary typing.
+            KeyCode::Left if state.compose.is_empty() && state.reaction_target.is_none() => {
+                state.reaction_target = state.last_reactable_message_id();
+                None
+            }
+            // Reaction-selection arms are checked before thread-selection
+            // ones: once a reaction target is set, Up/Down/Esc act on it
+            // first — otherwise, with both modes active at once (reacting
+            // to a message inside an open thread), Up/Down would switch
+            // which thread is open instead of moving within it, and Esc
+            // would close the thread instead of just clearing the
+            // reaction target.
+            KeyCode::Up if state.reaction_target.is_some() => {
+                state.move_reaction_selection(-1);
+                None
+            }
+            KeyCode::Down if state.reaction_target.is_some() => {
+                state.move_reaction_selection(1);
+                None
+            }
+            KeyCode::Esc if state.reaction_target.is_some() => {
+                state.reaction_target = None;
+                state.reaction_error = None;
                 None
             }
             KeyCode::Up if state.thread_reply_target.is_some() => {
@@ -547,32 +612,6 @@ impl AppState {
             KeyCode::Esc if state.thread_reply_target.is_some() => {
                 state.thread_reply_target = None;
                 state.message_scroll = 0;
-                None
-            }
-            // Left mirrors Right: targets a message to react to instead of
-            // reply to (#63). Guarded the same way — only fires on an
-            // empty draft, and only while neither mode is already active —
-            // so it never shadows ordinary typing or collides with
-            // thread-reply mode.
-            KeyCode::Left
-                if state.compose.is_empty()
-                    && state.reaction_target.is_none()
-                    && state.thread_reply_target.is_none() =>
-            {
-                state.reaction_target = state.last_visible_message_id();
-                None
-            }
-            KeyCode::Up if state.reaction_target.is_some() => {
-                state.move_reaction_selection(-1);
-                None
-            }
-            KeyCode::Down if state.reaction_target.is_some() => {
-                state.move_reaction_selection(1);
-                None
-            }
-            KeyCode::Esc if state.reaction_target.is_some() => {
-                state.reaction_target = None;
-                state.reaction_error = None;
                 None
             }
             // A digit 1-9 (then 0 for the tenth) toggles the matching
@@ -1492,6 +1531,17 @@ mod tests {
         }
     }
 
+    /// A reply actually attached to `root_id` — plain `message_with` leaves
+    /// `thread_root_id: None`, which `on_thread_loaded` filters out (it
+    /// only keeps messages that look like real replies), so a test that
+    /// wants a genuinely cached reply has to set this explicitly.
+    fn reply_to(root_id: &str, id: &str, author: &str, body: &str) -> Message {
+        Message {
+            thread_root_id: Some(root_id.to_string()),
+            ..message_with(id, author, body)
+        }
+    }
+
     #[test]
     fn left_arrow_on_empty_compose_enters_reaction_mode_targeting_the_last_message() {
         let mut state = logged_in_with_channels(["General"]);
@@ -1535,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_reply_mode_and_reaction_mode_are_mutually_exclusive() {
+    fn entering_thread_reply_mode_clears_any_prior_reaction_target() {
         let mut state = logged_in_with_channels(["General"]);
         state.on_messages_loaded(
             "c1".to_string(),
@@ -1543,14 +1593,155 @@ mod tests {
             Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
         );
         state.on_key(key(KeyCode::Tab));
-        state.on_key(key(KeyCode::Right)); // enters thread-reply mode
-        state.on_key(key(KeyCode::Left)); // must not also enter reaction mode
+        state.on_key(key(KeyCode::Left)); // targets m1 for a reaction
+        state.on_key(key(KeyCode::Esc)); // back to plain compose
+        state.on_key(key(KeyCode::Left)); // targets m1 for a reaction again
+        state.on_key(key(KeyCode::Right)); // opens m1 as a thread
 
         let Screen::LoggedIn(logged_in) = &state.screen else {
             panic!("expected LoggedIn");
         };
         assert!(logged_in.thread_reply_target.is_some());
-        assert_eq!(logged_in.reaction_target, None);
+        assert_eq!(
+            logged_in.reaction_target, None,
+            "opening a thread should drop a reaction target from the plain view"
+        );
+    }
+
+    #[test]
+    fn left_arrow_can_target_a_message_for_reaction_while_a_thread_is_open() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 1)], false)),
+        );
+        state.on_thread_loaded(
+            "root1".to_string(),
+            Ok(vec![reply_to(
+                "root1",
+                "reply1",
+                "Christopher",
+                "<p>hi</p>",
+            )]),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // opens root1's thread
+        state.on_key(key(KeyCode::Left)); // targets the last reactable message
+
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert!(
+            logged_in.thread_reply_target.is_some(),
+            "thread-reply mode should stay active alongside reaction mode"
+        );
+        assert_eq!(
+            logged_in.reaction_target,
+            Some("reply1".to_string()),
+            "the last message in the open thread (its newest reply) should be targeted"
+        );
+    }
+
+    #[test]
+    fn up_and_down_move_the_reaction_target_within_an_open_thread() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 1)], false)),
+        );
+        state.on_thread_loaded(
+            "root1".to_string(),
+            Ok(vec![reply_to(
+                "root1",
+                "reply1",
+                "Christopher",
+                "<p>hi</p>",
+            )]),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // opens root1's thread
+        state.on_key(key(KeyCode::Left)); // targets reply1 (the newest)
+
+        state.on_key(key(KeyCode::Up)); // older -> the root itself
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.reaction_target, Some("root1".to_string()));
+        assert_eq!(
+            logged_in.thread_reply_target,
+            Some("root1".to_string()),
+            "Up/Down should move the reaction target, not switch which thread is open"
+        );
+    }
+
+    #[test]
+    fn escape_clears_the_reaction_target_before_closing_an_open_thread() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with("m1", "Chris", "<p>hi</p>")], false)),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // opens the thread
+        state.on_key(key(KeyCode::Left)); // targets a reaction too
+
+        state.on_key(key(KeyCode::Esc)); // first Esc: clears the reaction only
+        {
+            let Screen::LoggedIn(logged_in) = &state.screen else {
+                panic!("expected LoggedIn");
+            };
+            assert_eq!(logged_in.reaction_target, None);
+            assert!(
+                logged_in.thread_reply_target.is_some(),
+                "the thread should still be open after the first Esc"
+            );
+        }
+
+        state.on_key(key(KeyCode::Esc)); // second Esc: closes the thread
+        let Screen::LoggedIn(logged_in) = &state.screen else {
+            panic!("expected LoggedIn");
+        };
+        assert_eq!(logged_in.thread_reply_target, None);
+    }
+
+    #[test]
+    fn reacting_to_a_cached_reply_targets_that_replys_own_id() {
+        let mut state = logged_in_with_channels(["General"]);
+        state.on_messages_loaded(
+            "c1".to_string(),
+            1,
+            Ok((vec![message_with_replies("root1", 1)], false)),
+        );
+        state.on_thread_loaded(
+            "root1".to_string(),
+            Ok(vec![reply_to(
+                "root1",
+                "reply1",
+                "Christopher",
+                "<p>hi</p>",
+            )]),
+        );
+        state.on_key(key(KeyCode::Tab));
+        state.on_key(key(KeyCode::Right)); // opens root1's thread
+        state.on_key(key(KeyCode::Left)); // targets reply1 (the newest)
+
+        let command = state.on_key(key(KeyCode::Char('1')));
+        match command {
+            Some(Command::ToggleReaction {
+                channel_id,
+                message_id,
+                add,
+                ..
+            }) => {
+                assert_eq!(channel_id, "c1");
+                assert_eq!(message_id, "reply1");
+                assert!(add);
+            }
+            other => panic!("expected ToggleReaction, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1747,7 +1938,12 @@ mod tests {
 
         state.on_thread_loaded(
             "root1".to_string(),
-            Ok(vec![message_with("reply1", "Christopher", "<p>hi</p>")]),
+            Ok(vec![reply_to(
+                "root1",
+                "reply1",
+                "Christopher",
+                "<p>hi</p>",
+            )]),
         );
         assert_eq!(
             state.threads_needing_fetch("c1"),
@@ -1791,7 +1987,12 @@ mod tests {
         );
         state.on_thread_loaded(
             "root1".to_string(),
-            Ok(vec![message_with("reply1", "Christopher", "<p>hi</p>")]),
+            Ok(vec![reply_to(
+                "root1",
+                "reply1",
+                "Christopher",
+                "<p>hi</p>",
+            )]),
         );
         assert_eq!(
             state.threads_needing_fetch("c1"),

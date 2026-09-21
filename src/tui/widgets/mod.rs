@@ -284,7 +284,7 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
             (
                 format!("{selected_channel_title} — Thread"),
                 windowed(
-                    thread_view_lines(state, target),
+                    thread_view_lines(state, target, state.reaction_target.as_deref()),
                     visible_cols(messages_area),
                     visible_rows(messages_area),
                     state.message_scroll,
@@ -413,13 +413,18 @@ fn logged_in_view(frame: &mut Frame, state: &LoggedInState) {
     let reacting = state.reaction_target.is_some();
     let hint = if searching {
         format!("/{}", state.search_query)
-    } else if replying {
-        "Replying — \u{2191}/\u{2193} change message · Enter send · Esc cancel".to_string()
     } else if reacting {
+        // Checked before `replying`: the two can be active together (#63 —
+        // reacting to a message inside an open thread), and while a
+        // reaction is targeted, Up/Down/Esc all act on *it* first (see
+        // `AppState::on_compose_key`), so the picker legend is what's
+        // actually relevant regardless of whether a thread is also open.
         format!(
             "Reacting — \u{2191}/\u{2193} change message · {} · Esc cancel",
             reaction_picker_hint()
         )
+    } else if replying {
+        "Replying — \u{2191}/\u{2193} change message · Enter send · Esc cancel".to_string()
     } else {
         format!(
             "Signed in as {} · Tab switch focus · \u{2191}/\u{2193} channels · PgUp/PgDn scroll · / search · \u{2190} react · \u{2192} reply · Enter send · r refresh · l logout · q quit",
@@ -774,19 +779,35 @@ fn mark_reaction_target(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
 /// among the rest of the channel's history), this is the *entire* pane
 /// body, so replies render as plain messages rather than indented — there's
 /// nothing else on screen to indent them relative to.
-fn thread_view_lines(state: &LoggedInState, target: &Message) -> Vec<Line<'static>> {
+/// `reaction_target`, when it names the root or one of the cached replies
+/// shown here, marks that message's lines the same way the normal channel
+/// view does (#63) — reacting works the same inside an open thread as it
+/// does outside one, so its highlight needs to follow it in here too.
+fn thread_view_lines(
+    state: &LoggedInState,
+    target: &Message,
+    reaction_target: Option<&str>,
+) -> Vec<Line<'static>> {
     let label_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::ITALIC);
     let mut lines = vec![Line::styled("Replying to:", label_style)];
-    lines.extend(message_lines(target));
+    let mut target_lines = message_lines(target);
+    if reaction_target == Some(target.id.as_str()) {
+        target_lines = mark_reaction_target(target_lines);
+    }
+    lines.extend(target_lines);
     lines.push(Line::from(""));
 
     match state.thread_replies.get(&target.id) {
         Some(replies) if !replies.is_empty() => {
             lines.push(Line::styled("Replies:", label_style));
             for reply in replies {
-                lines.extend(message_lines(reply));
+                let mut reply_lines = message_lines(reply);
+                if reaction_target == Some(reply.id.as_str()) {
+                    reply_lines = mark_reaction_target(reply_lines);
+                }
+                lines.extend(reply_lines);
             }
         }
         _ => lines.push(Line::styled(
@@ -1542,6 +1563,54 @@ mod tests {
         let content = render_to_text(&state, 110, 15);
         assert!(content.contains("Replies:"));
         assert!(content.contains("thank you"));
+    }
+
+    #[test]
+    fn a_reaction_target_inside_an_open_thread_is_marked_and_keeps_the_thread_open() {
+        let mut state = logged_in_state_with_messages(1);
+        {
+            let logged_in = logged_in_state_mut(&mut state);
+            logged_in.thread_reply_target = Some("m0".to_string());
+            let reply = Message {
+                id: "reply1".to_string(),
+                kind: "user".to_string(),
+                system_event: None,
+                body: "<p>thank you</p>".to_string(),
+                created_at: Utc::now(),
+                deleted_at: None,
+                author: MessageAuthor {
+                    id: "u2".to_string(),
+                    name: "Christopher".to_string(),
+                    preferences: None,
+                },
+                attachments: Vec::new(),
+                thread_root_id: Some("m0".to_string()),
+                reply_count: 0,
+                reactions: Vec::new(),
+            };
+            logged_in
+                .thread_replies
+                .insert("m0".to_string(), vec![reply]);
+            logged_in.reaction_target = Some("reply1".to_string());
+        }
+
+        let content = render_to_text(&state, 110, 15);
+        assert!(
+            content.contains("— Thread"),
+            "the thread view should stay open while reacting inside it:\n{content}"
+        );
+        assert!(
+            content.contains("» ") && content.contains("thank you"),
+            "the reply targeted for a reaction should be marked:\n{content}"
+        );
+        assert!(
+            content.contains("React"),
+            "the compose box should say React even with a thread also open:\n{content}"
+        );
+        assert!(
+            content.contains("Reacting"),
+            "the reacting hint should take priority over the replying hint:\n{content}"
+        );
     }
 
     #[test]
