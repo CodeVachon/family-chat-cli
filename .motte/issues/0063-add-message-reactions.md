@@ -5,7 +5,7 @@ state: Done
 parent: 6
 labels: [task, chat]
 created: 2026-09-21T20:03:33Z
-updated: 2026-09-21T20:19:48Z
+updated: 2026-09-21T20:29:53Z
 ---
 
 ## Description
@@ -35,3 +35,9 @@ Verified live end-to-end in the real 'Testing' channel via tmux: toggled a react
 ### 2026-09-21T20:19:48Z — Christopher Vachon (user)
 
 Follow-up polish: the reaction summary line sat flush at the pane's left edge, out of place under the timestamp/author prefix. Indented it 8 columns to align under the author name ("[HH:MM] " is always 8 columns). Also fixed mark_reaction_target to pad every other line of the marked message by the marker's 2-column width, not just leave the first line prefixed — otherwise the reaction line under the currently-targeted message (the one most likely being looked at) drifted 2 columns out of alignment relative to every other message. Verified live in Testing with two reactions on the targeted message. See commit 0f36af2.
+
+### 2026-09-21T20:29:53Z — Christopher Vachon (user)
+
+Follow-up: reactions now work inside an open thread too, not just the plain channel view. Left no longer requires thread_reply_target to be None — reactable_messages() returns the open thread's root+cached replies when one is open, else the plain visible_messages(), and Left/Up/Down/digit-toggle all key off that. The two modes can be active simultaneously; reordered key-handling so reaction Up/Down/Esc are checked before thread Up/Down/Esc (arrows move the reaction target, not the open thread, once one is set; Esc clears the reaction first, the thread on a second press). Opening a new thread (Right) clears any stale reaction target from a different message list. thread_view_lines and the status-line hint priority updated to match.
+
+Verified live in Testing: reacted to a reply, moved up to an older reply then the root while the thread stayed open throughout, reacted to the root, confirmed layered Esc (reaction first, then thread), and confirmed both reactions render correctly in the normal view afterward. 170 tests passing. See commit 160eeb9.
