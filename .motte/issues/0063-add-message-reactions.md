@@ -5,7 +5,7 @@ state: Done
 parent: 6
 labels: [task, chat]
 created: 2026-09-21T20:03:33Z
-updated: 2026-09-21T20:03:57Z
+updated: 2026-09-21T20:19:48Z
 ---
 
 ## Description
@@ -31,3 +31,7 @@ Realtime: a reaction could belong to an already-cached thread reply, which a pla
 Verified live end-to-end in the real 'Testing' channel via tmux: toggled a reaction on then off through the actual UI with immediate visible feedback, confirmed via curl (GET .../messages) that the server's own reactedByMe state matched at each step, and confirmed a reaction added via a separate direct API call (simulating another client) appeared live with zero local action, via the reaction.changed SSE event.
 
 163 tests passing (17 new: 12 state, 2 client wiremock, 3 widget render), clippy/fmt clean.
+
+### 2026-09-21T20:19:48Z — Christopher Vachon (user)
+
+Follow-up polish: the reaction summary line sat flush at the pane's left edge, out of place under the timestamp/author prefix. Indented it 8 columns to align under the author name ("[HH:MM] " is always 8 columns). Also fixed mark_reaction_target to pad every other line of the marked message by the marker's 2-column width, not just leave the first line prefixed — otherwise the reaction line under the currently-targeted message (the one most likely being looked at) drifted 2 columns out of alignment relative to every other message. Verified live in Testing with two reactions on the targeted message. See commit 0f36af2.
