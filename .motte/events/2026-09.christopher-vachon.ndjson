@@ -162,3 +162,6 @@
 {"at":"2026-09-18T15:12:02Z","id":37,"by":"Christopher Vachon","as":"user","type":"assigned","from":null,"to":"Christopher Vachon"}
 {"at":"2026-09-18T15:16:27Z","id":37,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-18T15:16:28Z","id":37,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
+{"at":"2026-09-21T20:03:33Z","id":63,"by":"Christopher Vachon","as":"user","type":"created","title":"Add message reactions","state":"In Progress"}
+{"at":"2026-09-21T20:03:56Z","id":63,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-21T20:03:57Z","id":63,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
