@@ -738,18 +738,33 @@ fn messages_to_lines(
 /// "yellow means currently acted on" idiom `focus_style` and the channel
 /// list's reversed selection already use elsewhere, applied here to a
 /// single message rather than a whole pane.
-fn mark_reaction_target(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    if let Some(first) = lines.first_mut() {
-        let mut spans = vec![Span::styled(
-            "» ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )];
-        spans.extend(std::mem::take(&mut first.spans));
-        *first = Line::from(spans);
-    }
+fn mark_reaction_target(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut line)| {
+            // Only the first line gets the visible "» " marker — every
+            // other line (a wrapped continuation, an attachment, the
+            // reactions line) gets the same 2-column blank padding
+            // instead, the same "pad, don't just mark the first line"
+            // idiom `indent_lines` uses for thread replies, so a reaction
+            // line under the *targeted* message still lines up under the
+            // author name rather than drifting left by the marker's width.
+            let marker = if i == 0 {
+                Span::styled(
+                    "» ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw("  ")
+            };
+            let mut spans = vec![marker];
+            spans.append(&mut line.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// The whole-pane thread view shown in thread-reply mode (#61): the
@@ -871,9 +886,12 @@ fn message_lines(message: &Message) -> Vec<Line<'static>> {
 /// `mark_reaction_target` uses), so a glance shows which of possibly
 /// several reactions is "mine" without re-reading each one.
 fn reaction_summary_line(reactions: &[Reaction]) -> Line<'static> {
-    let mut spans = Vec::with_capacity(reactions.len() * 2);
-    for reaction in reactions {
-        if !spans.is_empty() {
+    // Indented to line up under the author name rather than sitting at the
+    // pane's left edge — `"[HH:MM] "` (zero-padded 24-hour time) is always
+    // 8 columns wide, matching where `message_lines`'s author span starts.
+    let mut spans = vec![Span::raw("        ")];
+    for (i, reaction) in reactions.iter().enumerate() {
+        if i > 0 {
             spans.push(Span::raw(" "));
         }
         let style = if reaction.reacted_by_me {
@@ -1557,6 +1575,67 @@ mod tests {
         let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(normalized.contains("👍 2"), "missing reaction:\n{content}");
         assert!(normalized.contains("🎉 1"), "missing reaction:\n{content}");
+    }
+
+    #[test]
+    fn reaction_summary_line_is_indented_to_align_under_the_author_name() {
+        // "[HH:MM] " (zero-padded 24-hour time) is always 8 columns —
+        // matches where message_lines' author span starts, so a reaction
+        // line reads as belonging to that message rather than sitting
+        // flush against the pane's left edge.
+        let line = reaction_summary_line(&[Reaction {
+            emoji: "👍".to_string(),
+            count: 1,
+            reacted_by_me: false,
+        }]);
+        assert_eq!(line.spans[0].content, "        ");
+        assert_eq!(line.spans[0].content.chars().count(), 8);
+    }
+
+    #[test]
+    fn marking_a_reaction_target_pads_its_other_lines_to_stay_aligned() {
+        // The visible "» " marker only replaces the first line's own
+        // (empty) leading space — every other line of that same message
+        // (here, its reaction summary) must get the same 2-column padding
+        // instead, so it doesn't drift left of where it'd sit on an
+        // unmarked message.
+        let message = Message {
+            id: "m1".to_string(),
+            kind: "user".to_string(),
+            system_event: None,
+            body: "<p>hi</p>".to_string(),
+            created_at: Utc::now(),
+            deleted_at: None,
+            author: MessageAuthor {
+                id: "u1".to_string(),
+                name: "Chris".to_string(),
+                preferences: None,
+            },
+            attachments: Vec::new(),
+            thread_root_id: None,
+            reply_count: 0,
+            reactions: vec![Reaction {
+                emoji: "👍".to_string(),
+                count: 1,
+                reacted_by_me: false,
+            }],
+        };
+        let unmarked = message_lines(&message);
+        let marked = mark_reaction_target(message_lines(&message));
+
+        let leading_spaces = |line: &Line| -> usize {
+            line.spans
+                .iter()
+                .flat_map(|s| s.content.chars())
+                .take_while(|c| *c == ' ')
+                .count()
+        };
+        let reaction_row = unmarked.len() - 1;
+        assert_eq!(
+            leading_spaces(&marked[reaction_row]),
+            leading_spaces(&unmarked[reaction_row]) + 2,
+            "the reaction line should be padded by exactly the marker's width"
+        );
     }
 
     #[test]
