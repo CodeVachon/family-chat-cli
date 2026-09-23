@@ -3,8 +3,11 @@ mod app;
 mod auth;
 mod cli;
 mod config;
+mod selfupdate;
 mod text;
 mod tui;
+
+use std::io::IsTerminal;
 
 use anyhow::Context;
 use clap::Parser;
@@ -20,14 +23,23 @@ const DEFAULT_SERVER: &str = "https://chat.thevachonfamily.ca";
 /// The keyring profile to use when the config file doesn't set one.
 const DEFAULT_PROFILE: &str = "default";
 
+/// The version reported by `--version` and by `upgrade`/`uninstall` (#64),
+/// baked in from Cargo.toml at compile time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn main() -> anyhow::Result<()> {
     let args = cli::Cli::parse();
-    if let Some(cli::Command::Config { action }) = args.command {
-        // A tiny, synchronous CLI utility, run and exited before any of the
-        // TUI's own setup — its output is meant to show up directly in the
-        // terminal, unlike the TUI itself, which never writes to
-        // stdout/stderr once it enables raw mode (see `init_logging`).
-        return run_config_command(action);
+    match args.command {
+        Some(cli::Command::Config { action }) => {
+            // A tiny, synchronous CLI utility, run and exited before any of
+            // the TUI's own setup — its output is meant to show up directly
+            // in the terminal, unlike the TUI itself, which never writes to
+            // stdout/stderr once it enables raw mode (see `init_logging`).
+            return run_config_command(action);
+        }
+        Some(cli::Command::Upgrade(args)) => return selfupdate::run_upgrade(&args),
+        Some(cli::Command::Uninstall(args)) => return selfupdate::run_uninstall(&args),
+        None => {}
     }
 
     let _log_guard = init_logging()?;
@@ -59,10 +71,29 @@ fn main() -> anyhow::Result<()> {
     )?;
     let client = ApiClient::new(server);
 
-    tokio::runtime::Builder::new_multi_thread()
+    let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(tui::run(client, Box::new(store)))
+        .block_on(tui::run(client, Box::new(store)));
+    update_nudge();
+    result
+}
+
+/// After the TUI exits, mention a newer release if one is known (#64). Best
+/// effort: a panic or slow lookup inside the check must never affect the
+/// run's outcome, and it's silent unless a managed installation exists and a
+/// newer release is already cached or a quick lookup finds one (see
+/// `selfupdate::nudge`).
+fn update_nudge() {
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let line = std::panic::catch_unwind(selfupdate::nudge::maybe_line)
+        .ok()
+        .flatten();
+    if let Some(line) = line {
+        eprintln!("{line}");
+    }
 }
 
 /// `--server`/`FAMILY_CHAT_URL` (clap already merges those two into one

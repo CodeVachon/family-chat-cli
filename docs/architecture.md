@@ -125,3 +125,32 @@ capability in #1's plan: auth (#3 family), channels/messages/reactions/threads
 (`reqwest` + `serde` + `api::types`), realtime (`reqwest-eventsource`),
 credential storage (`keyring`), TUI (`ratatui`/`crossterm`), CLI entry
 (`clap`) — nothing in the MVP scope is unaccounted for.
+
+## Update (2026-09-23): distribution and self-update (#64)
+
+`CodeVachon/family-chat-cli` is now a public GitHub repo with a tagged-release
+pipeline — the "not something we'll be distributing" framing above described
+the situation as of #10, not a permanent constraint. Distribution still means
+"a handful of family members," not a general audience, and none of the
+decisions above changed on account of it (still a single binary crate, still
+no published-MSRV policy, still `edition = "2024"`).
+
+What's new: `src/selfupdate/` (a managed `~/.family-chat-cli` install layout,
+release lookup, download/verify, `upgrade`/`uninstall`), matching the exact
+mechanism `CodeVachon/merge-pipeline` already uses, so a machine with both
+tools behaves the same way for each. One deliberate difference from that
+tool: Linux release assets are built against glibc, not musl —
+`keyring`'s `dbus-secret-service` backend links the system `libdbus` via FFI
+(`libdbus-sys`), which a musl static build can't satisfy the way a
+dependency-free tool could, so both Linux legs build on their own native
+architecture (`ubuntu-latest` / `ubuntu-24.04-arm`) rather than
+cross-compiling to a static target. This also firms up the "target
+platforms" section above from "should build, not actively tested" to
+"built and smoke-tested on every tagged release" for all five
+platform/arch combinations, via `.github/workflows/release.yml`.
+
+Self-update's HTTP needs (`ureq`, blocking) are kept deliberately separate
+from the app's own `reqwest`/tokio stack — `upgrade`/`uninstall` run as a
+one-shot subcommand dispatched directly from `main` before the TUI or its
+async runtime ever starts, the same way the `config` subcommand already
+does.
