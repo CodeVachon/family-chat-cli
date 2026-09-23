@@ -165,3 +165,6 @@
 {"at":"2026-09-21T20:03:33Z","id":63,"by":"Christopher Vachon","as":"user","type":"created","title":"Add message reactions","state":"In Progress"}
 {"at":"2026-09-21T20:03:56Z","id":63,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
 {"at":"2026-09-21T20:03:57Z","id":63,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
+{"at":"2026-09-23T15:31:59Z","id":64,"by":"Christopher Vachon","as":"user","type":"created","title":"Add self-update: upgrade/uninstall commands, install scripts, release pipeline","state":"In Progress"}
+{"at":"2026-09-23T15:48:15Z","id":64,"by":"Christopher Vachon","as":"user","type":"state","from":"In Progress","to":"Done"}
+{"at":"2026-09-23T15:48:16Z","id":64,"by":"Christopher Vachon","as":"user","type":"assigned","from":"Christopher Vachon","to":null}
